@@ -26,6 +26,38 @@ extern const uint8_t client_key_pem_end[] asm("_binary_client_key_end");
 extern const uint8_t server_cert_pem_start[] asm("_binary_amazon_pem_start");
 extern const uint8_t server_cert_pem_end[] asm("_binary_amazon_pem_end");
 
+/**
+ * @brief The MQTT client
+ */
+static esp_mqtt_client_handle_t client;
+
+/**
+ * @brief The MQTT client configuration
+ */
+static esp_mqtt_client_config_t mqtt_cfg = {
+  /// TODO: Make this URL configurable in KConfig
+  .broker.address.uri = "mqtts://a21g6vkmxju0d9-ats.iot.sa-east-1.amazonaws.com:8883",
+  .broker.verification.certificate = (const char *)server_cert_pem_start,
+  .credentials = {
+    .authentication = {
+      .certificate = (const char *)client_cert_pem_start,
+      .key = (const char *)client_key_pem_start
+    }
+  },
+  .buffer = {
+    .size = 8192,
+    .out_size = 8192
+  }
+};
+
+/**
+ * @brief Update the certificate for the MQTT client
+ */
+esp_err_t update_cert(char *cert, char *key) {
+  mqtt_cfg.credentials.authentication.certificate = cert;
+  mqtt_cfg.credentials.authentication.key = key;
+  return esp_mqtt_set_config(client, &mqtt_cfg);
+}
 
 /**
  * @brief Event handler registered to receive MQTT events
@@ -50,7 +82,6 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
   case MQTT_EVENT_DISCONNECTED:
     ESP_LOGI(TAG, "MQTT_EVENT_DISCONNECTED");
     break;
-
   case MQTT_EVENT_SUBSCRIBED:
     ESP_LOGI(TAG, "MQTT_EVENT_SUBSCRIBED, msg_id=%d", event->msg_id);
     break;
@@ -83,24 +114,9 @@ static void mqtt_event_handler(void *handler_args, esp_event_base_t base, int32_
 
 esp_mqtt_client_handle_t mqtt_app_start(void)
 {
-  const esp_mqtt_client_config_t mqtt_cfg = {
-    /// TODO: Make this URL configurable in KConfig
-    .broker.address.uri = "mqtts://a21g6vkmxju0d9-ats.iot.sa-east-1.amazonaws.com:8883",
-    .broker.verification.certificate = (const char *)server_cert_pem_start,
-    .credentials = {
-      .authentication = {
-        .certificate = (const char *)client_cert_pem_start,
-        .key = (const char *)client_key_pem_start
-      }
-    },
-    .buffer = {
-      .size = 8192,
-      .out_size = 8192
-    }
-  };
 
   ESP_LOGI(TAG, "[APP] Free memory: %" PRIu32 " bytes", esp_get_free_heap_size());
-  esp_mqtt_client_handle_t client = esp_mqtt_client_init(&mqtt_cfg);
+  client = esp_mqtt_client_init(&mqtt_cfg);
   /* The last argument may be used to pass data to the event handler, in this example mqtt_event_handler */
   esp_mqtt_client_register_event(client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
   esp_mqtt_client_start(client);

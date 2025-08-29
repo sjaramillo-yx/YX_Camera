@@ -45,3 +45,8 @@ void reset_claimer();
  * @brief Initialize the MQTT client and register handlers
  */
 void provisioner_start(void);
+
+/**
+ * @brief The task in charge of creating the Thing in AWS IoT
+ */
+static void createThing(void *p);
