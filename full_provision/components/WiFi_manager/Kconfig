@@ -1,5 +1,0 @@
-menu "WiFi Manager configuration"
-  config MAX_RETRY
-    int "Maximum amount of retries for WiFi connection"
-    default 10
-endmenu
