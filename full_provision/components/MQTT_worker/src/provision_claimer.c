@@ -73,6 +73,8 @@ static void mqtt_subscribed_handler(void *handler_args, esp_event_base_t base, i
   int msg_id;
   cJSON *payload = cJSON_CreateObject();
   cJSON *parameters = cJSON_CreateObject();
+  uint8_t mac_addr[6] = {0};
+  char serial_num[7];
   switch(state) {
     case UNINITIALIZED:
       state = SUSCRIBED_CERT_CREATION;
@@ -82,9 +84,15 @@ static void mqtt_subscribed_handler(void *handler_args, esp_event_base_t base, i
     break;
     case GOT_CERTIFICATE:
       state = SUSCRIBED_THING_CREATION;
+      /* get MAC address */
+      esp_efuse_mac_get_default(mac_addr);
+      ESP_LOGD(TAG, "Ethernet MAC Address: %02x:%02x:%02x:%02x:%02x:%02x",
+         mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
+      snprintf(serial_num, sizeof(serial_num), "%02x%02x%02x", mac_addr[3], mac_addr[4], mac_addr[5]);
+      ESP_LOGD(TAG, "Serial number from MAC: %s", serial_num);
       // Attempt to create a new Thing
       cJSON_AddStringToObject(payload, "certificateOwnershipToken", ownership_tkn);
-      cJSON_AddStringToObject(parameters, "SerialNumber", "123");
+      cJSON_AddStringToObject(parameters, "SerialNumber", serial_num);
       cJSON_AddItemToObjectCS(payload, "parameters", parameters);
       msg_id = esp_mqtt_client_publish( client, "$aws/provisioning-templates/" CONFIG_TEMPLATE_NAME "/provision/json", 
                                         cJSON_Print(payload), 0, 1, 0);
@@ -109,7 +117,6 @@ static void mqtt_data_handler(void *handler_args, esp_event_base_t base, int32_t
   ESP_LOGD(TAG, "Received data");
   esp_mqtt_event_handle_t event = event_data;
   esp_mqtt_client_handle_t client = event->client;
-  int msg_id;
   cJSON *payload = cJSON_Parse(event->data);
   cJSON *token, *cert, *certId, *key, *new_thing_name;
   switch(state) {
@@ -167,11 +174,10 @@ static void provision_task(void *p) {
   if (obtained_certificates == NULL) {
     ESP_LOGE(TAG, "Unsufficient memory!");
   }
-  ESP_LOGI(TAG, "Certificate id is %s", certificate_id);
+  /// TODO: Pass this strings as arguments instead of a structure to save memory
   snprintf(obtained_certificates->client_crt, sizeof(device_certificate), device_certificate);
   snprintf(obtained_certificates->client_key, sizeof(private_key), private_key);
   snprintf(obtained_certificates->cert_id, sizeof(certificate_id), certificate_id);
-  ESP_LOGI(TAG, "Certificate id in struct is %s", obtained_certificates->cert_id);
   snprintf(obtained_certificates->thing_name, sizeof(thing_name), thing_name);
   nvsman_save_certs(obtained_certificates);
   free(obtained_certificates);
