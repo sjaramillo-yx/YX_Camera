@@ -1,6 +1,0 @@
-menu "Provisioning configuration"
-
-    config TEMPLATE_NAME
-        string "The name of the Thing template to be used"
-        default "TestTemplate"
-endmenu
