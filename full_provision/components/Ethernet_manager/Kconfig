@@ -1,0 +1,44 @@
+menu "Ethernet Manager"
+  menu "GPIOs"
+      config ETH_TXD0_GPIO
+      int "TXD0"
+      default  34
+
+      config ETH_TXD1_GPIO
+      int "TXD1"
+      default  35
+    
+      config ETH_RXD0_GPIO
+      int "RXD0"
+      default  30
+    
+      config ETH_RXD1_GPIO
+      int "RXD1"
+      default  29
+    
+      config ETH_TXEN_GPIO
+      int "TXEN"
+      default  49
+
+      config ETH_CRS_DV_GPIO
+      int "CRSDV"
+      default  28
+
+      config ETH_REF_CLK_GPIO
+      int "REFCLK"
+      default  50
+
+      config ETH_MDC_GPIO
+      int "MDC"
+      default  31
+
+      config ETH_MDIO_GPIO
+      int "MDIO"
+      default  52
+
+      config ETH_RST_GPIO
+      int "RST"
+      default  51
+      
+  endmenu
+endmenu
