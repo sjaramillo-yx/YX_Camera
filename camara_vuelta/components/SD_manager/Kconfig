@@ -1,0 +1,60 @@
+menu "SD Card Manager"
+
+  config SD_CARD_MOUNT_POINT
+  string "VFS Mountpoint for SD Card"
+  default "/sdcard"
+
+  menu "GPIOs"
+      config PIN_CLK
+      int "CLK"
+      default 43
+
+      config PIN_CMD
+      int "CMD"
+      default  44
+    
+      config PIN_D0
+      int "D0"
+      default  39
+    
+      config PIN_D1
+      int "1"
+      default  40
+    
+      config PIN_D2
+      int "D2"
+      default  41
+
+      config PIN_D3
+      int "D3"
+      default  42      
+  endmenu
+
+  menu "SDMMC Mount Configurations"
+      config FORMAT_IF_MOUNT_FAILED
+        bool "Format the filesystem if mounting fails"
+        default false
+      
+      config MAX_OPEN_FILES
+        int "Maximum amount of open files"
+        default 5
+
+      config ALLOCATION_UNIT_SIZE
+        int "Allocation unit size when formatting"
+        default 65536
+        help
+          Must be a power of 2, between sector size and 128 * sector size. For SD cards, sector size is always 512 bytes
+  endmenu
+
+  menu "SDMMC Host Configurations"
+      config SDMMC_MAX_SPEED
+      int "SDMMC max speed in kHz"
+      range 20000 100000
+      default  40000
+
+      config SDMMC_SLOT_BUS_WIDTH
+      int "SDMMC bus width"
+      range 1 4
+      default  4
+  endmenu
+endmenu
