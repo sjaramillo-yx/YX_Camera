@@ -2,7 +2,7 @@
  * @file mqtt_worker.c
  * @date September 2025
  * @author Simón Jaramillo <sjaramillo@yx.cl>
- * 
+ *
  * @ingroup mqtt_worker
  */
 
@@ -31,28 +31,20 @@ static esp_mqtt_client_handle_t client = NULL;
  * @brief The MQTT client configuration
  */
 static esp_mqtt_client_config_t mqtt_cfg = {
-  /// TODO: Make this URL configurable in KConfig
-  .broker.address.uri = "mqtts://" CONFIG_AWS_ENDPOINT ":8883",
-  .broker.verification.certificate = (const char *)server_cert_pem_start,
-  .credentials = {
-    .authentication = {
-      .certificate = (const char *)client_cert_pem_start,
-      .key = (const char *)client_key_pem_start
-    }
-  },
-  .buffer = {
-    .size = 8192,
-    .out_size = 8192
-  }
-};
+    /// TODO: Make this URL configurable in KConfig
+    .broker.address.uri              = "mqtts://" CONFIG_AWS_ENDPOINT ":8883",
+    .broker.verification.certificate = (const char *)server_cert_pem_start,
+    .credentials = {.authentication = {.certificate = (const char *)client_cert_pem_start,
+                                       .key         = (const char *)client_key_pem_start}},
+    .buffer      = {.size = 8192, .out_size = 8192}};
 
 /**
  * @brief initialize the MQTT client with default certificates (pre-provisioning)
  */
 static esp_err_t mqttworker_defaults(void) {
   mqtt_cfg.credentials.authentication.certificate = (const char *)client_cert_pem_start;
-  mqtt_cfg.credentials.authentication.key = (const char *)client_key_pem_start;
-  if (client != NULL) 
+  mqtt_cfg.credentials.authentication.key         = (const char *)client_key_pem_start;
+  if (client != NULL)
     return esp_mqtt_set_config(client, &mqtt_cfg);
   client = esp_mqtt_client_init(&mqtt_cfg);
 

@@ -2,7 +2,7 @@
  * @file provision_claimer.h
  * @date September 2025
  * @author Simón Jaramillo <sjaramillo@yx.cl>
- * 
+ *
  * @brief Declarations for a state machine in charge of claiming a certificate.
  * @ingroup mqtt_worker
  */
@@ -51,7 +51,7 @@ static ClaimerState state = UNINITIALIZED;
 
 /**
  * @brief Provision the device by claim
- * 
+ *
  * @param client
  */
 esp_err_t provision_begin(esp_mqtt_client_handle_t client);

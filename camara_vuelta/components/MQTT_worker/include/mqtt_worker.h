@@ -3,7 +3,7 @@
  * @file mqtt_worker.h
  * @date September 2025
  * @author Simón Jaramillo <sjaramillo@yx.cl>
- * 
+ *
  * @brief This header defines a simple MQTT worker for AWS IoT Core
  * @ingroup mqtt_worker
  */

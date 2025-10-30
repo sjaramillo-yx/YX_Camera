@@ -3,10 +3,10 @@
  * @file ethernet_manager.h
  * @date September 2025
  * @author Simón Jaramillo <sjaramillo@yx.cl>
- * 
+ *
  * @brief This header provides helper functions to create and bind the ethernet
  * interface.
- * 
+ *
  * @ingroup ethernet_manager
  */
 #pragma once
@@ -31,9 +31,9 @@ extern "C" {
 
 /**
  * @brief Initialize the Ethernet driver.
- * 
+ *
  * @param[out] eth_handle
- * 
+ *
  * @return
  *          - `ESP_OK` on success
  *          - `ESP_ERR_INVALID_ARG` when passed invalid pointers

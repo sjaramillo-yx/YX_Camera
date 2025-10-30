@@ -2,7 +2,7 @@
  * @file nvs_manager.c
  * @date September 2025
  * @author Simón Jaramillo <sjaramillo@yx.cl>
- * 
+ *
  * @ingroup mqtt_worker
  */
 #include "nvs_manager.h"
@@ -20,8 +20,8 @@ static cert_data_t cert_data;
 static esp_err_t nvsman_retreive_certs() {
   // Open the namespace "certs"
   nvs_handle_t certs_handle;
-  esp_err_t err = nvs_open("certs", NVS_READONLY, &certs_handle);
-  if (err != ESP_OK){
+  esp_err_t    err = nvs_open("certs", NVS_READONLY, &certs_handle);
+  if (err != ESP_OK) {
     if (err == ESP_ERR_NVS_NOT_FOUND) {
       ESP_LOGW(TAG, "Certificates not found in NVS!");
     } else {
@@ -32,7 +32,7 @@ static esp_err_t nvsman_retreive_certs() {
 
   ESP_LOGI(TAG, "Reading stored certificate");
   size_t cert_data_size = sizeof(cert_data_t);
-  err = nvs_get_blob(certs_handle, "cert_data", &cert_data, &cert_data_size);
+  err                   = nvs_get_blob(certs_handle, "cert_data", &cert_data, &cert_data_size);
   if (err != ESP_OK) {
     if (err == ESP_ERR_NVS_NOT_FOUND) {
       ESP_LOGW(TAG, "Certificates not found in NVS!");
@@ -53,8 +53,8 @@ static esp_err_t nvsman_retreive_certs() {
 esp_err_t nvsman_save_certs(cert_data_t *new_certs) {
   // Open the namespace "certs"
   nvs_handle_t certs_handle;
-  esp_err_t err = nvs_open("certs", NVS_READWRITE, &certs_handle);
-  if (err != ESP_OK){
+  esp_err_t    err = nvs_open("certs", NVS_READWRITE, &certs_handle);
+  if (err != ESP_OK) {
     ESP_LOGE(TAG, "Failed opening NVS namespace (0x%02x)", err);
     return err;
   }
@@ -62,7 +62,7 @@ esp_err_t nvsman_save_certs(cert_data_t *new_certs) {
   ESP_LOGI(TAG, "Saving new certificates");
   /// TODO: Check if certificates are already saved and notify
   size_t cert_data_size = sizeof(cert_data_t);
-  err = nvs_set_blob(certs_handle, "cert_data", new_certs, cert_data_size);
+  err                   = nvs_set_blob(certs_handle, "cert_data", new_certs, cert_data_size);
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "Failed to write certificate data blob!");
     nvs_close(certs_handle);
@@ -87,7 +87,8 @@ esp_err_t nvsman_begin(void) {
     err = nvs_flash_init();
   }
 
-  if (err != ESP_OK) return err;
+  if (err != ESP_OK)
+    return err;
   err = nvsman_retreive_certs();
 
   return err;

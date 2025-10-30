@@ -2,7 +2,7 @@
  * @file nvs_manager.h
  * @date August 2025
  * @author Simón Jaramillo <sjaramillo@yx.cl>
- * 
+ *
  * @brief This header manages Non-Volatile Storage of client certificates and
  * private keys for the authentication of the MQTT Worker.
  * @ingroup mqtt_worker

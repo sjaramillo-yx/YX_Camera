@@ -6,8 +6,8 @@ static const char *TAG = "SD Card Manager" /**< Logging tag for this module. */;
 
 /* ================ STRUCTS ================ */
 typedef struct {
-  char *data;                     // Stage buffer
-  uint64_t staged;                // Staged bytes
+  char             *data;         // Stage buffer
+  uint64_t          staged;       // Staged bytes
   SemaphoreHandle_t write_smphr;  // A semaphore for writing this buffer
 } stage_t;
 
@@ -17,10 +17,10 @@ typedef struct {
 } staging_buffers_t;
 
 /* ================ GLOBALS ================ */
-static sdmmc_card_t *card;                                     // Card handle
-static const char mount_point[] = CONFIG_SD_CARD_MOUNT_POINT;  // Mount point string
-static bool sd_initialized = false;                            // Initialized flag
-sd_pwr_ctrl_handle_t pwr_ctrl_handle = NULL;                   // LDO power handle
+static sdmmc_card_t *card;                                          // Card handle
+static const char    mount_point[]   = CONFIG_SD_CARD_MOUNT_POINT;  // Mount point string
+static bool          sd_initialized  = false;                       // Initialized flag
+sd_pwr_ctrl_handle_t pwr_ctrl_handle = NULL;                        // LDO power handle
 
 /* =============== PUBLIC FUNCTIONS ===============*/
 
@@ -33,19 +33,19 @@ esp_err_t sdman_mount() {
 #else
       .format_if_mount_failed = false,
 #endif
-      .max_files = CONFIG_MAX_OPEN_FILES,
+      .max_files            = CONFIG_MAX_OPEN_FILES,
       .allocation_unit_size = CONFIG_ALLOCATION_UNIT_SIZE};
 
   sdmmc_host_t host = SDMMC_HOST_DEFAULT();
   host.max_freq_khz = CONFIG_SDMMC_MAX_SPEED;
-  host.flags = SDMMC_HOST_FLAG_4BIT;
+  host.flags        = SDMMC_HOST_FLAG_4BIT;
 
   sdmmc_slot_config_t slot_config = SDMMC_SLOT_CONFIG_DEFAULT();
-  slot_config.width = CONFIG_SDMMC_SLOT_BUS_WIDTH;
+  slot_config.width               = CONFIG_SDMMC_SLOT_BUS_WIDTH;
 
   slot_config.clk = CONFIG_PIN_CLK;
   slot_config.cmd = CONFIG_PIN_CMD;
-  slot_config.d0 = CONFIG_PIN_D0;
+  slot_config.d0  = CONFIG_PIN_D0;
   if (CONFIG_SDMMC_SLOT_BUS_WIDTH == 4) {
     slot_config.d1 = CONFIG_PIN_D1;
     slot_config.d2 = CONFIG_PIN_D2;

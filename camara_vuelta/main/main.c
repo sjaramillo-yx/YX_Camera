@@ -10,8 +10,7 @@
 
 static const char *TAG = "full-provision";
 
-void app_main(void)
-{
+void app_main(void) {
   ESP_LOGI(TAG, "[APP] Startup..");
   ESP_LOGI(TAG, "[APP] Free memory: %" PRIu32 " bytes", esp_get_free_heap_size());
   ESP_LOGI(TAG, "[APP] IDF version: %s", esp_get_idf_version());
