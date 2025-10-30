@@ -1,6 +1,9 @@
 build
 .vscode
 sdkconfig
+managed_components
 *.pem
 *.crt
 *.key
+*.old
+*.lock
