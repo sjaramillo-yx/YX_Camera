@@ -3,7 +3,8 @@
  * @date September 2025
  * @author Simón Jaramillo <sjaramillo@yx.cl>
  * 
- * @brief Declarations for a state machine in charge of claiming a certificate
+ * @brief Declarations for a state machine in charge of claiming a certificate.
+ * @ingroup mqtt_worker
  */
 
 #pragma once

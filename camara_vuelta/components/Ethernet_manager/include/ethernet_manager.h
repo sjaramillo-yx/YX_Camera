@@ -1,14 +1,17 @@
 /**
+ * @defgroup ethernet_manager Ethernet Manager Component
  * @file ethernet_manager.h
  * @date September 2025
  * @author Simón Jaramillo <sjaramillo@yx.cl>
  * 
  * @brief This header provides helper functions to create and bind the ethernet
- * interface
+ * interface.
+ * 
+ * @ingroup ethernet_manager
  */
 #pragma once
 
- /* Espressif includes */
+/* Espressif includes */
 #include <esp_check.h>
 #include <esp_err.h>
 #include <esp_eth_driver.h>
@@ -27,7 +30,7 @@ extern "C" {
 #endif
 
 /**
- * @brief Initialize the Ethernet driver
+ * @brief Initialize the Ethernet driver.
  * 
  * @param[out] eth_handle
  * 

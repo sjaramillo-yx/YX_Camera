@@ -1,3 +1,10 @@
+/**
+ * @file provision_claimer.c
+ * @date September 2025
+ * @author Simón Jaramillo <sjaramillo@yx.cl>
+ * 
+ * @ingroup mqtt_worker
+ */
 #include "provision_claimer.h"
 #include "nvs_manager.h"
 

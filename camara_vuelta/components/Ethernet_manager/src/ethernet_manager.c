@@ -1,9 +1,14 @@
+/**
+ * @file ethernet_manager.c
+ * @date September 2025
+ * @author Simón Jaramillo <sjaramillo@yx.cl>
+ * 
+ * @ingroup ethernet_manager
+ */
+
 #include "ethernet_manager.h"
 
-/**
- * @brief Logging tag for this module
- */
-static const char *TAG = "Ethernet Manager";
+static const char *TAG = "Ethernet Manager" /**< Logging tag for this module. */;
 
 /**
  * @brief Internal ESP32 Ethernet initialization

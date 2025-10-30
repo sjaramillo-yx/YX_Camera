@@ -1,18 +1,26 @@
+/**
+ * @file mqtt_worker.c
+ * @date September 2025
+ * @author Simón Jaramillo <sjaramillo@yx.cl>
+ * 
+ * @ingroup mqtt_worker
+ */
+
 #include "mqtt_worker.h"
 #include "nvs_manager.h"
 #include "provision_claimer.h"
 
-/**
- * @brief Logging tag for this module
- */
-static const char *TAG = "MQTT Worker";
+static const char *TAG = "MQTT Worker"; /**< Logging tag for this module. */
 
 /**
- * @brief Access certificates embedded in binary image
+ * @name Certificates
+ * @brief Certs included in the binary image.
+ * @{
  */
 extern const uint8_t client_cert_pem_start[] asm("_binary_client_crt_start");
 extern const uint8_t client_key_pem_start[] asm("_binary_client_key_start");
 extern const uint8_t server_cert_pem_start[] asm("_binary_amazon_pem_start");
+/** @} */
 
 /**
  * @brief The MQTT client
