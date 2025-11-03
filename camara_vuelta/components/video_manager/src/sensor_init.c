@@ -72,7 +72,7 @@ void example_sensor_init(example_sensor_config_t *sensor_config,
   esp_cam_sensor_query_format(cam, &cam_fmt_array);
   const esp_cam_sensor_format_t *parray = cam_fmt_array.format_array;
   for (int i = 0; i < cam_fmt_array.count; i++) {
-    ESP_LOGI(TAG, "fmt[%d].name:%s", i, parray[i].name);
+    ESP_LOGD(TAG, "fmt[%d].name:%s", i, parray[i].name);
   }
 
   esp_cam_sensor_format_t *cam_cur_fmt = NULL;

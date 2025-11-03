@@ -66,10 +66,9 @@ static volatile bool s_primed = false;
 // CSI frame buffer size
 static const size_t FRAME_BYTES = ALIGN_UP((size_t)BYTES_PER_FRAME, 64);
 
-// Pool storage
+// Buffers for the CSI frames and encoder output
 static uint8_t                 *s_frame_bufs[FRAME_BUF_COUNT];  // CSI DMAable YUV buffers
 static esp_h264_enc_out_frame_t s_enc_bufs[ENC_BUF_COUNT];
-static uint8_t                 *enc_frame;
 
 // Queues
 static QueueHandle_t s_free_frame_q     = NULL;  // items: uint8_t* (frame buffer)
@@ -121,7 +120,7 @@ static bool my_async_memcpy_cb(async_memcpy_handle_t mcp_hdl, async_memcpy_event
   SemaphoreHandle_t sem              = (SemaphoreHandle_t)cb_args;
   BaseType_t        high_task_wakeup = pdFALSE;
   xSemaphoreGiveFromISR(
-      dma_semphr,
+      sem,
       &high_task_wakeup);  // high_task_wakeup set to pdTRUE if some high priority task unblocked
   return high_task_wakeup == pdTRUE;
 }
@@ -217,7 +216,7 @@ static void write_to_sd_task(void *arg) {
 
     // Check if threshold has been crossed
     if (staging.active.staged >= STAGE_LIMIT) {
-      uint64_t to_flush = staging.active.staged & ~(CONFIG_ALLOCATION_UNIT_SIZE - 1);
+      to_flush = staging.active.staged & ~(CONFIG_ALLOCATION_UNIT_SIZE - 1);
       ESP_LOGD(TAG, "[%s] Sending %lld bytes to sink", pcTaskGetName(NULL), to_flush);
       uint64_t moved = staging.active.staged - to_flush;
       // Copy remaining bytes to inactive stage
@@ -347,7 +346,6 @@ static void capture_encode_task(void *arg) {
 
 static void allocate_pools(void) {
   // Allocate CSI frame buffers (DMA/PSRAM OK, 64-byte aligned)
-  uint32_t actual_size_;
   for (int i = 0; i < FRAME_BUF_COUNT; ++i) {
     s_frame_bufs[i] = (uint8_t *)heap_caps_aligned_alloc(
         64, FRAME_BYTES, MALLOC_CAP_DMA | MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
@@ -395,7 +393,7 @@ static void create_queues(void) {
   // Seed free-chunk queue with all chunk descriptors
   for (int i = 0; i < ENC_BUF_COUNT; ++i) {
     esp_h264_enc_out_frame_t *c = &s_enc_bufs[i];
-    ESP_LOGI(TAG, "Seeding output at %p with buffer at %p", c, c->raw_data.buffer);
+    ESP_LOGD(TAG, "Seeding output at %p with buffer at %p", c, c->raw_data.buffer);
     xQueueSendToBack(s_free_encoded_q, &c, portMAX_DELAY);
   }
 

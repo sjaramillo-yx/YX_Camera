@@ -1,9 +1,0 @@
-menu "WiFi Manager configuration"
-  config SSID
-    string "The SSID of the desired WiFi connection"
-    default "Bartleby"
-
-  config PASSWORD
-    string "The password fot the desired WiFi connection"
-    default "Melville"
-endmenu
