@@ -109,3 +109,23 @@ esp_err_t mqttworker_begin(void) {
 
   return err;
 }
+
+esp_err_t mqttworker_publish_initial_state(cJSON *sdJSON) {
+  esp_err_t      ret     = ESP_OK;
+  cJSON         *payload = cJSON_CreateObject();
+  struct timeval system_time;
+
+  /* Get information */
+  esp_app_desc_t *app_description = (esp_app_desc_t *)esp_app_get_description();
+  gettimeofday(&system_time, NULL);
+  /* Build the payload */
+  cJSON_AddStringToObject(payload, "thingName", mqtt_cert_data.thing_name);
+  cJSON_AddNumberToObject(payload, "deviceTime", (uint64_t)system_time.tv_sec);
+  cJSON_AddItemToObject(payload, "sdCardInfo", sdJSON);
+  cJSON_AddStringToObject(payload, "firmwareVersion", esp_app_get_description()->version);
+  int msg_id = esp_mqtt_client_publish(client, "cameras/status", cJSON_Print(payload), 0, 1, 0);
+  ESP_LOGD(TAG, "sent publish successful, msg_id=%d", msg_id);
+  cJSON_Delete(payload);
+  return ret;
+  /// TODO: Handle errors
+}

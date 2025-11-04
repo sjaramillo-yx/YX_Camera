@@ -3,6 +3,7 @@
 #include <esp_log.h>
 #include <esp_system.h>
 /* Standard includes*/
+#include <cJSON.h>
 /* FreeRTOS includes*/
 /* Custom includes */
 #include "SD_manager.h"
@@ -19,11 +20,11 @@ void app_main(void) {
 
   // Set log levels
   esp_log_level_set("*", ESP_LOG_INFO);
-  esp_log_level_set("mqtt_client", ESP_LOG_INFO);
+  esp_log_level_set("mqtt_client", ESP_LOG_DEBUG);
   esp_log_level_set("transport_base", ESP_LOG_INFO);
   esp_log_level_set("transport", ESP_LOG_INFO);
   esp_log_level_set("Provision Claimer", ESP_LOG_INFO);
-  esp_log_level_set("MQTT Worker", ESP_LOG_INFO);
+  esp_log_level_set("MQTT Worker", ESP_LOG_DEBUG);
   esp_log_level_set("NVS Manager", ESP_LOG_INFO);
 
   // Initialize ethernet
@@ -34,7 +35,6 @@ void app_main(void) {
     /// TODO: Handle errors
   }
 
-  /// TODO: Ensure the MQTT worker is connected to AWS
   // Mount the SD Card
   sdman_mount();
   // Initialize the Video Manager
@@ -43,4 +43,5 @@ void app_main(void) {
   // Get information about the SD Card
   cJSON *sdJSON;
   sdman_getJSON(&sdJSON);
+  mqttworker_publish_initial_state(sdJSON);  // This also frees the memory for sdJSON
 }
