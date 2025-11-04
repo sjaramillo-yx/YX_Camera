@@ -15,7 +15,7 @@ static const char *TAG = "NVS Manager";
 /**
  * @brief The certificate data
  */
-static cert_data_t cert_data;
+static cert_data_t cert_data = {.populated = false};
 
 static esp_err_t nvsman_retreive_certs() {
   // Open the namespace "certs"
@@ -30,7 +30,7 @@ static esp_err_t nvsman_retreive_certs() {
     return err;
   }
 
-  ESP_LOGI(TAG, "Reading stored certificate");
+  ESP_LOGI(TAG, "Searching for stored certificate");
   size_t cert_data_size = sizeof(cert_data_t);
   err                   = nvs_get_blob(certs_handle, "cert_data", &cert_data, &cert_data_size);
   if (err != ESP_OK) {
@@ -42,8 +42,10 @@ static esp_err_t nvsman_retreive_certs() {
     }
   } else {
     /// TODO: Goto tag for cleanup instead of if/else
+    ESP_LOGI(TAG, "Certificate correctly retreived from NVS");
     ESP_LOGD(TAG, "Certificate ID: %s", cert_data.cert_id);
     ESP_LOGD(TAG, "Thing Name: %s", cert_data.thing_name);
+    cert_data.populated = true;
   }
 
   nvs_close(certs_handle);
@@ -73,6 +75,8 @@ esp_err_t nvsman_save_certs(cert_data_t *new_certs) {
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "Failed to commit data");
   }
+  cert_data           = *new_certs;
+  cert_data.populated = true;
 
   nvs_close(certs_handle);
   return err;
@@ -92,4 +96,13 @@ esp_err_t nvsman_begin(void) {
   err = nvsman_retreive_certs();
 
   return err;
+}
+
+esp_err_t nvsman_get_certs(cert_data_t *out_certs) {
+  if (!cert_data.populated) {
+    ESP_LOGE(TAG, "Certificate data is not populated yet!");
+    return ESP_ERR_INVALID_STATE;
+  }
+  *out_certs = cert_data;
+  return ESP_OK;
 }

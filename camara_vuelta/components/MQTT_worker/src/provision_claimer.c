@@ -9,6 +9,7 @@
 #include "nvs_manager.h"
 
 /*-------- Globals ---------*/
+/// TODO: Remove static memory and move to dynamic heap allocations
 /**
  * @brief Logging tag for this module
  */
@@ -50,7 +51,7 @@ static void mqtt_connected_handler(void *handler_args, esp_event_base_t base, in
   ESP_LOGD(TAG, "Connected to MQTT broker");
   esp_mqtt_event_handle_t  event  = event_data;
   esp_mqtt_client_handle_t client = event->client;
-  switch (state) {
+  switch (claimer_state) {
   case UNINITIALIZED:
     esp_mqtt_client_subscribe(client, "$aws/certificates/create/json/accepted", 0);
     esp_mqtt_client_subscribe(client, "$aws/certificates/create/json/rejected", 0);
@@ -84,15 +85,15 @@ static void mqtt_subscribed_handler(void *handler_args, esp_event_base_t base, i
   cJSON                   *parameters  = cJSON_CreateObject();
   uint8_t                  mac_addr[6] = {0};
   char                     serial_num[7];
-  switch (state) {
+  switch (claimer_state) {
   case UNINITIALIZED:
-    state = SUSCRIBED_CERT_CREATION;
+    claimer_state = SUSCRIBED_CERT_CREATION;
     // Attempt to create a new certificate
     msg_id = esp_mqtt_client_publish(client, "$aws/certificates/create/json", NULL, 0, 1, 0);
     ESP_LOGD(TAG, "sent publish successful, msg_id=%d", msg_id);
     break;
   case GOT_CERTIFICATE:
-    state = SUSCRIBED_THING_CREATION;
+    claimer_state = SUSCRIBED_THING_CREATION;
     /* get MAC address */
     esp_efuse_mac_get_default(mac_addr);
     ESP_LOGD(TAG, "Ethernet MAC Address: %02x:%02x:%02x:%02x:%02x:%02x", mac_addr[0], mac_addr[1],
@@ -129,9 +130,9 @@ static void mqtt_data_handler(void *handler_args, esp_event_base_t base, int32_t
   esp_mqtt_client_handle_t client  = event->client;
   cJSON                   *payload = cJSON_Parse(event->data);
   cJSON                   *token, *cert, *certId, *key, *new_thing_name;
-  switch (state) {
+  switch (claimer_state) {
   case SUSCRIBED_CERT_CREATION:
-    state = GOT_CERTIFICATE;
+    claimer_state = GOT_CERTIFICATE;
     // Extract certificate from payload
     token  = cJSON_GetObjectItem(payload, "certificateOwnershipToken");
     cert   = cJSON_GetObjectItem(payload, "certificatePem");
@@ -150,7 +151,7 @@ static void mqtt_data_handler(void *handler_args, esp_event_base_t base, int32_t
         client, "$aws/provisioning-templates/" CONFIG_TEMPLATE_NAME "/provision/json/rejected", 0);
     break;
   case SUSCRIBED_THING_CREATION:
-    state = CREATED_THING;
+    claimer_state = CREATED_THING;
     // Extract thing name
     new_thing_name = cJSON_GetObjectItem(payload, "thingName");
     ESP_LOGI(TAG, "Thing Name = %s", new_thing_name->valuestring);

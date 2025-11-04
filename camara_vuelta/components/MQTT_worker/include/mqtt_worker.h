@@ -15,6 +15,8 @@
 #include <mqtt_client.h>
 /* Standard includes*/
 /* FreeRTOS includes*/
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 /* Custom includes */
 
 /**

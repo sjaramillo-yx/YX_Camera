@@ -25,6 +25,7 @@ typedef struct {
   char client_key[4096];
   char cert_id[512];
   char thing_name[512];
+  bool populated;
 } cert_data_t;
 
 /**
@@ -36,3 +37,8 @@ esp_err_t nvsman_begin(void);
  * @brief Save certificate data to the NVS partition
  */
 esp_err_t nvsman_save_certs(cert_data_t *new_certs);
+
+/**
+ * @brief Get certificate data pointer
+ */
+esp_err_t nvsman_get_certs(cert_data_t *out_certs);
