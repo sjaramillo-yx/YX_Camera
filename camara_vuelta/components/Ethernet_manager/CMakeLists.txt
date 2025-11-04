@@ -9,6 +9,7 @@ set(
     esp_eth
     esp_event
     esp_netif
+    lwip
 )
 
 
