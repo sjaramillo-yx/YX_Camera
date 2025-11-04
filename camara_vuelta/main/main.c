@@ -40,5 +40,7 @@ void app_main(void) {
   // Initialize the Video Manager
   vman_init();
 
-  // Unmount the
+  // Get information about the SD Card
+  cJSON *sdJSON;
+  sdman_getJSON(&sdJSON);
 }

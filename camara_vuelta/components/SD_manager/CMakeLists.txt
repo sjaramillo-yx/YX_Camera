@@ -9,6 +9,7 @@ set(
     esp_driver_sdmmc
     esp_mm
     fatfs
+    json
     vfs
 )
 

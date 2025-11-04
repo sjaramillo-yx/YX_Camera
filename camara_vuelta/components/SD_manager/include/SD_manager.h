@@ -37,6 +37,7 @@
 #include <sd_pwr_ctrl_by_on_chip_ldo.h>
 #include <sdmmc_cmd.h>
 /* Standard includes*/
+#include <cJSON.h>
 #include <string.h>
 /* FreeRTOS includes*/
 /* Custom includes */
@@ -72,6 +73,13 @@ esp_err_t sdman_open_file(char *filename, char *mode, FILE **file_handle);
  * @param file Where the bytes should be written if the stage fills up
  */
 esp_err_t sdman_write_bytes(char *data, long long int len, FILE *fp);
+
+/**
+ * @brief Write SD card information to a cJSON object
+ *
+ * @param[out] sdJSON A pointer to the cJSON structure where the information should be saved to
+ */
+esp_err_t sdman_getJSON(cJSON **sdJSON);
 
 #ifdef __cplusplus
 }
