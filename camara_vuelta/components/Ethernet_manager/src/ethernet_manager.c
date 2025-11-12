@@ -74,11 +74,12 @@ err:
 }
 
 esp_err_t ethman_init(esp_eth_handle_t *eth_handle_out) {
-  /* Funciton variables */
-  esp_err_t         ret        = ESP_OK;
-  esp_eth_handle_t *eth_handle = NULL;
-  esp_eth_mac_t    *mac        = NULL;
-  esp_eth_phy_t    *phy        = NULL;
+  /* Function variables */
+  esp_err_t         ret         = ESP_OK;
+  esp_eth_handle_t *eth_handle  = NULL;
+  esp_eth_mac_t    *mac         = NULL;
+  esp_eth_phy_t    *phy         = NULL;
+  uint8_t           mac_addr[6] = {0};
   /* Initialize Ethernet */
   ESP_GOTO_ON_FALSE(eth_handle_out != NULL, ESP_ERR_INVALID_ARG, err, TAG,
                     "invalid arguments: ethernet handle is already initialized!");
@@ -105,6 +106,9 @@ esp_err_t ethman_init(esp_eth_handle_t *eth_handle_out) {
       esp_event_handler_register(IP_EVENT, IP_EVENT_ETH_GOT_IP, &got_ip_event_handler, NULL), err,
       TAG, "Couldn't register the IP obtained handler");
   /* Output and return */
+  esp_efuse_mac_get_default(mac_addr);
+  ESP_LOGD(TAG, "Created Ethernet interface with MAC Address: %02x:%02x:%02x:%02x:%02x:%02x",
+           mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
   *eth_handle_out = eth_handle;
   return ret;
 
