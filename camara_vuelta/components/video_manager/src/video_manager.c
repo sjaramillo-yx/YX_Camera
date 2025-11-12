@@ -3,6 +3,7 @@
 #include "esp_private/esp_cache_private.h"
 #include "sensor_init.h"
 #include <esp_cache.h>
+#include <unistd.h>
 
 static const char *TAG = "Video Manager" /**< Logging tag for this module. */;
 
@@ -80,6 +81,7 @@ static QueueHandle_t s_filled_stage_q   = NULL;  // items: stage_t (filled stage
 // Semaphores
 static SemaphoreHandle_t dma_semphr   = NULL;  // DMA async copy complete
 static SemaphoreHandle_t write_semphr = NULL;
+static SemaphoreHandle_t enc_semphr   = NULL;
 
 // Tasks
 static TaskHandle_t s_write_sink_h = NULL;  // The task in charge of writing to file
@@ -89,8 +91,15 @@ static TaskHandle_t write_task, capture;
 // Camera handle
 static esp_cam_ctlr_handle_t s_cam = NULL;
 
-// H.264 encoder handle
-static esp_h264_enc_handle_t s_enc = NULL;
+// H.264 encoder handle and configuration
+static esp_h264_enc_handle_t s_enc   = NULL;
+static esp_h264_enc_cfg_hw_t enc_cfg = {
+    .gop      = H264_GOP,
+    .fps      = H264_FPS,
+    .res      = {.width = HRES, .height = VRES},
+    .rc       = {.bitrate = HRES * VRES * 1.5 * 8 * 30 / 100, .qp_min = 25, .qp_max = 36},
+    .pic_type = H264_FORMAT,
+};
 
 // DMA copy handle
 async_memcpy_handle_t driver = NULL;
@@ -101,6 +110,12 @@ staging_buffers_t staging;
 // Flags
 bool initialized = false;
 bool recording   = false;
+
+// Recording events
+static recording_conf_t        rec_conf;
+static recording_error_t       rec_error;
+static recording_file_t        rec_file;
+static esp_event_loop_handle_t rec_event_h;
 
 /*================== Statics ==================*/
 // Helper function to allocate aligned memory with error checking
@@ -260,30 +275,6 @@ fail:
 }
 
 static void capture_encode_task(void *arg) {
-  // Prepare encoder config
-  /// TODO: Move encoder init to bootstrapping
-  /// TODO: Turn parameters into Kconfig options
-  esp_h264_enc_cfg_hw_t enc_cfg = {
-      .gop      = H264_GOP,
-      .fps      = H264_FPS,
-      .res      = {.width = HRES, .height = VRES},
-      .rc       = {.bitrate = HRES * VRES * 1.5 * 8 * 30 / 100, .qp_min = 25, .qp_max = 36},
-      .pic_type = H264_FORMAT,
-  };
-  // Create a new hardware encoder using the configuration
-  esp_err_t ret = esp_h264_enc_hw_new(&enc_cfg, &s_enc);
-  if (ret != ESP_H264_ERR_OK) {
-    ESP_LOGE(TAG, "Failed to create H264 encoder (error: %d)", ret);
-    vTaskDelete(NULL);
-    return;
-  }
-  // Open the encoder and check for errors
-  if (esp_h264_enc_open(s_enc) != ESP_H264_ERR_OK) {
-    ESP_LOGE(TAG, "H264 open failed");
-    vTaskDelete(NULL);
-    return;
-  }
-
   // Declare capture variables
   uint32_t frame_idx         = 0;
   uint8_t *frame             = NULL;
@@ -291,20 +282,24 @@ static void capture_encode_task(void *arg) {
   uint64_t encoded           = 0;
   int      frames_per_second = 0;
 
-  // Get encoder parameter values (useful for debugging)
+  // Encoder parameter values (useful for debugging)
   esp_h264_enc_param_hw_handle_t param_hd;
-  esp_h264_enc_hw_get_param_hd(s_enc, &param_hd);
-  uint32_t set_bitrate = 0;
+  uint32_t                       set_bitrate = 0;
+  uint8_t                        set_fps     = 0;
 
   // Enter the main capture loop
   while (1) {
+    ESP_LOGD(TAG, "Taking enc_semphr in capture_encode_task");
+    xSemaphoreTake(enc_semphr, portMAX_DELAY);
     // Receive a frame from the free frame queue
+    ESP_LOGD(TAG, "Receiving frame from s_free_frame_q");
     xQueueReceive(s_free_frame_q, &frame, portMAX_DELAY);
     esp_cam_ctlr_trans_t trans = {
         .buffer = frame,
         .buflen = FRAME_BYTES,
     };
     // Ask the camera sensor to fill the buffer
+    ESP_LOGD(TAG, "Receiving transaction from sensor");
     ESP_ERROR_CHECK(esp_cam_ctlr_receive(s_cam, &trans, ESP_CAM_CTLR_MAX_DELAY));
 
     // Build input frame view for encoder from the received bytes
@@ -315,6 +310,7 @@ static void capture_encode_task(void *arg) {
 
     // Encoded output container
     esp_h264_enc_out_frame_t *out;
+    ESP_LOGD(TAG, "Receiving buffer from s_free_encoded_q");
     xQueueReceive(s_free_encoded_q, &out, portMAX_DELAY);       // Get a free encoded buffer
     esp_h264_err_t er = esp_h264_enc_process(s_enc, &in, out);  // Ask the encoder to fill it
     xQueueSendToBack(s_free_frame_q, &frame, portMAX_DELAY);    // Return the used sensor buffer
@@ -327,9 +323,11 @@ static void capture_encode_task(void *arg) {
     } else {
       // Print stream information every second
       if (esp_timer_get_time() - now > 1000000ULL) {
+        esp_h264_enc_hw_get_param_hd(s_enc, &param_hd);
         esp_h264_enc_get_bitrate(&param_hd->base, &set_bitrate);
+        esp_h264_enc_get_fps(&param_hd->base, &set_fps);
         ESP_LOGI(TAG, "Bitrate = %lld bps = %lld kB/s, Set bitrate= %ld bps, FPS=%d, Set FPS=%d",
-                 encoded * 8, encoded >> 10, set_bitrate, frames_per_second, 30);
+                 encoded * 8, encoded >> 10, set_bitrate, frames_per_second, set_fps);
         encoded = frames_per_second = 0;
         now                         = esp_timer_get_time();
       }
@@ -339,6 +337,8 @@ static void capture_encode_task(void *arg) {
       xQueueSendToBack(s_filled_encoded_q, &out, portMAX_DELAY);
     }
     frame_idx++;
+    ESP_LOGD(TAG, "Giving enc_semphr");
+    xSemaphoreGive(enc_semphr);
   }
 }
 
@@ -383,26 +383,85 @@ static void create_queues(void) {
     abort();
   }
 
-  // Seed free-frame queue with all frame buffers
-  for (int i = 0; i < FRAME_BUF_COUNT; ++i) {
-    uint8_t *p = s_frame_bufs[i];
-    ESP_LOGD(TAG, "Frame %d at %p", i, p);
-    xQueueSendToBack(s_free_frame_q, &p, portMAX_DELAY);
-  }
-
-  // Seed free-chunk queue with all chunk descriptors
-  for (int i = 0; i < ENC_BUF_COUNT; ++i) {
-    esp_h264_enc_out_frame_t *c = &s_enc_bufs[i];
-    ESP_LOGD(TAG, "Seeding output at %p with buffer at %p", c, c->raw_data.buffer);
-    xQueueSendToBack(s_free_encoded_q, &c, portMAX_DELAY);
-  }
-
   // Copying semaphore
   dma_semphr = xSemaphoreCreateBinary();
   // Writing semaphore
   write_semphr = xSemaphoreCreateBinary();
+  // Encoding semaphroe
+  enc_semphr = xSemaphoreCreateBinary();
+
   xSemaphoreGive(write_semphr);
+  xSemaphoreGive(enc_semphr);
 }
+
+/*================== Event Handlers ==================*/
+static void vman_rec_handler(void *handler_arg, esp_event_base_t event_base, int32_t event_id,
+                             void *event_data) {
+  ESP_LOGI(TAG, "Received event %s:%d", (char *)event_base, event_id);
+  recording_conf_t              *rec_params;
+  esp_h264_enc_param_hw_handle_t param_hd;
+  uint8_t                        set_fps;
+  esp_err_t                      started = ESP_OK;
+  char                           rec_filename[128];
+  char                          *stop_id;
+  switch (event_id) {
+  case REC_BEGIN:
+    rec_params = (recording_conf_t *)event_data;
+    // For now, print the values
+    ESP_LOGI(TAG, "Received recording parameters:");
+    ESP_LOGI(TAG, "\t\tResolution:%dx%d", rec_params->hres, rec_params->vres);
+    ESP_LOGI(TAG, "\t\tFPS:%d", rec_params->fps);
+    ESP_LOGI(TAG, "\t\tQPs:%d (max), %d (min)", rec_params->qp_max, rec_params->qp_min);
+    ESP_LOGI(TAG, "\t\tTimeout:%d", rec_params->timeout_seconds);
+    ESP_LOGI(TAG, "\t\tTransaction ID:%s", rec_params->transaction_id);
+    ESP_LOGI(TAG, "\t\tTarget bitrate:%d", rec_params->target_bitrate);
+    ESP_LOGI(TAG, "\t\tJob ID:%s", rec_params->aws_job_id);
+    // Set the encoder configuration
+    /// TODO: Configure the sensor or PPA also
+    /*
+    enc_cfg.fps        = rec_params->fps;
+    enc_cfg.res.height = rec_params->vres;
+    enc_cfg.res.width  = rec_params->hres;
+    enc_cfg.rc.bitrate = rec_params->target_bitrate;
+    enc_cfg.rc.qp_max  = rec_params->qp_max;
+    enc_cfg.rc.qp_min  = rec_params->qp_min;
+    */
+    // Begin the recording
+    snprintf(rec_filename, sizeof(rec_filename) + 4, "%s.bin", rec_params->transaction_id);
+    started = vman_start_recording(rec_filename);
+    if (started != ESP_OK) {
+      /// TODO: Handle errors here
+      break;
+    }
+    esp_event_post_to(rec_event_h, RECORDING_EVENTS, REC_STARTED, (void *)&rec_conf,
+                      sizeof(rec_conf), 100);
+    /// TODO: Check if this works
+    rec_conf = *rec_params;
+    break;
+  case REC_STOP:
+    stop_id = (char *)event_data;
+    // Check transaction ID against current configuration
+    if (strcmp(rec_conf.transaction_id, stop_id)) {
+      ESP_LOGW(TAG, "Received stop signal for transaction ID %s but current recording has ID %s",
+               stop_id, rec_conf.transaction_id);
+      rec_error.error_code = ESP_ERR_INVALID_ARG;
+      snprintf(rec_error.error_message, sizeof(rec_error.error_message),
+               "Mismatched transaction ID");
+      snprintf(rec_error.errored_module, sizeof(rec_error.errored_module), TAG);
+      esp_event_post_to(rec_event_h, RECORDING_EVENTS, REC_ERROR, (void *)&rec_error,
+                        sizeof(rec_error), 100);
+      break;
+    }
+    vman_stop_recording();
+    esp_event_post_to(rec_event_h, RECORDING_EVENTS, REC_DONE, (void *)&rec_file, sizeof(rec_file),
+                      100);
+    break;
+  default:
+    break;
+  }
+}
+
+/*================== Public Functions ==================*/
 
 esp_err_t vman_init(void) {
   esp_err_t ret = ESP_OK;
@@ -482,13 +541,18 @@ esp_err_t vman_init(void) {
   xTaskCreatePinnedToCore(write_to_sd_task, "vman.write.loop", 4096, NULL, 8, &write_task, 0);
   xTaskCreatePinnedToCore(capture_encode_task, "vman.capture.loop", 6144, NULL, 5, &capture, 1);
 
+  //---------------Recording event loop------------------//
+  /// TODO:  Check for errors
+  ESP_ERROR_CHECK(rec_eventloop_get_handle(&rec_event_h));
+  ESP_ERROR_CHECK(esp_event_handler_instance_register_with(
+      rec_event_h, RECORDING_EVENTS, ESP_EVENT_ANY_ID, vman_rec_handler, NULL, NULL));
   // Done
   initialized = true;
 
   return ret;
 }
 
-esp_err_t vman_start_recording(void) {
+esp_err_t vman_start_recording(char *filename) {
   esp_err_t ret = ESP_OK;
   // Check there's no other recording in progress
   ESP_GOTO_ON_FALSE(!recording, ESP_ERR_INVALID_STATE, fail, TAG, "Recording already in progress");
@@ -496,13 +560,36 @@ esp_err_t vman_start_recording(void) {
   ESP_GOTO_ON_FALSE(initialized, ESP_ERR_INVALID_STATE, fail, TAG,
                     "Video Manager has not been initialized");
   // Create the file for the recording
-  /// TODO: Receive the filename as an argument
-  ESP_GOTO_ON_ERROR(sdman_open_file("test.bin", "wb", &fp), fail, TAG, "Couldn't create the file");
+  ESP_GOTO_ON_ERROR(sdman_open_file(filename, "wb", &fp), fail, TAG, "Couldn't create the file");
+  snprintf(rec_file.filename, sizeof(rec_file.filename), filename);
+  rec_file.size = rec_file.recorded_seconds = 0;
+  // Create a new hardware encoder using the configuration
+  ESP_GOTO_ON_ERROR(esp_h264_enc_hw_new(&enc_cfg, &s_enc), fail, TAG,
+                    "Failed to create H264 encoder");
+  // Open the encoder and check for errors
+  ESP_GOTO_ON_ERROR(esp_h264_enc_open(s_enc), fail, TAG, "Failed opening H264 encoder");
+
   // Start the camera controller
   ESP_GOTO_ON_ERROR(esp_cam_ctlr_start(s_cam), fail, TAG, "Couldn't start the camera controller");
+
+  // Seed the queues
+  for (int i = 0; i < FRAME_BUF_COUNT; ++i) {
+    uint8_t *p = s_frame_bufs[i];
+    ESP_LOGD(TAG, "Frame %d at %p", i, p);
+    xQueueSendToBack(s_free_frame_q, &p, portMAX_DELAY);
+  }
+
+  for (int i = 0; i < ENC_BUF_COUNT; ++i) {
+    esp_h264_enc_out_frame_t *c = &s_enc_bufs[i];
+    ESP_LOGD(TAG, "Seeding output at %p with buffer at %p", c, c->raw_data.buffer);
+    xQueueSendToBack(s_free_encoded_q, &c, portMAX_DELAY);
+  }
+
   // Done
   ESP_LOGI(TAG, "Recording started");
-  recording = true;
+  recording                 = true;
+  rec_file.recorded_seconds = esp_timer_get_time();
+
   return ESP_OK;
 
 fail:
@@ -511,6 +598,7 @@ fail:
     fclose(fp);
     fp = NULL;
   }
+  /// TODO: If the encoded got created, delete it
   return ret;
 }
 
@@ -520,8 +608,15 @@ esp_err_t vman_stop_recording(void) {
   ESP_GOTO_ON_FALSE(recording, ESP_ERR_INVALID_STATE, fail, TAG,
                     "There's no recording in progress");
 
+  // Close the hardware encoder
+  ESP_LOGD(TAG, "Taking enc_semphr in vman_stop_recording");
+  xSemaphoreTake(enc_semphr, portMAX_DELAY);
+  esp_h264_enc_close(s_enc);
+  esp_h264_enc_del(s_enc);
+
   // Stop the camera controller
   ESP_GOTO_ON_ERROR(esp_cam_ctlr_stop(s_cam), cleanup, TAG, "Couldn't stop the camera controller");
+  rec_file.recorded_seconds = (esp_timer_get_time() - rec_file.recorded_seconds) / 1000000UL;
 
   // Wait for stages to be written by taking their write semaphores
   xSemaphoreTake(staging.inactive.write_smphr, portMAX_DELAY);
@@ -541,6 +636,7 @@ esp_err_t vman_stop_recording(void) {
       ESP_LOGE(TAG, "SD write failed (%llu/%llu)", wrote, staging.active.staged);
     }
   }
+  rec_file.size = ftell(fp);
 
   // Clear the queues
   xQueueReset(s_free_encoded_q);
@@ -555,6 +651,12 @@ esp_err_t vman_stop_recording(void) {
 
   // Done
   ESP_LOGI(TAG, "Recording stopped");
+  xSemaphoreGive(enc_semphr);
+  recording = false;
+
+  // Report resulting statistics
+  ESP_LOGI(TAG, "Filesize: %lld bytes", rec_file.size);
+  ESP_LOGI(TAG, "Video duration: %lld seconds", rec_file.recorded_seconds);
 
 cleanup:
   fflush(fp);

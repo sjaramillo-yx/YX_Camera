@@ -33,6 +33,9 @@
 #include "freertos/task.h"
 /* Custom includes */
 #include "SD_manager.h"
+#include "recording_events.h"
+
+#pragma once
 
 #ifdef __cplusplus
 extern "C" {
@@ -45,8 +48,10 @@ esp_err_t vman_init(void);
 
 /**
  * @brief Start a recording
+ *
+ * @param filename the name of the file where the video will be written
  */
-esp_err_t vman_start_recording(void);
+esp_err_t vman_start_recording(char *filename);
 
 /**
  * @brief Stop a recording

@@ -10,6 +10,7 @@ set(
   requires
     esp_app_format
     json
+    Recording_events
 )
 
 set(

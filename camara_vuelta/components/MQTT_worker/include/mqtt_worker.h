@@ -21,6 +21,9 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 /* Custom includes */
+#include "recording_events.h"
+
+#pragma once
 
 /**
  * @brief Initialize the worker
