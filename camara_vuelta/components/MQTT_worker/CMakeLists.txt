@@ -8,6 +8,7 @@ set(include_dirs include)
 
 set(
   requires
+    esp_app_format
     json
 )
 

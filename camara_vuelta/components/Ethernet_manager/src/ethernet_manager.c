@@ -11,6 +11,15 @@
 static const char *TAG = "Ethernet Manager" /**< Logging tag for this module. */;
 
 /**
+ * @brief A simple handler for the IP obtained that starts the SNTP synchronization flow
+ */
+static void got_ip_event_handler(void *arg, esp_event_base_t event_base, int32_t event_id,
+                                 void *event_data) {
+  esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+  esp_netif_sntp_init(&config);
+}
+
+/**
  * @brief Internal ESP32 Ethernet initialization
  *
  * @param[out] mac_out optionally returns Ethernet MAC object
@@ -91,6 +100,10 @@ esp_err_t ethman_init(esp_eth_handle_t *eth_handle_out) {
   /* Start the Ethernet state machine*/
   ret = esp_eth_start(eth_handle);
   ESP_GOTO_ON_FALSE(ret == ESP_OK, ret, err, TAG, "Couldn't start the Ethernate state machine!");
+  /* Register the IP obtained handler */
+  ESP_GOTO_ON_ERROR(
+      esp_event_handler_register(IP_EVENT, IP_EVENT_ETH_GOT_IP, &got_ip_event_handler, NULL), err,
+      TAG, "Couldn't register the IP obtained handler");
   /* Output and return */
   *eth_handle_out = eth_handle;
   return ret;

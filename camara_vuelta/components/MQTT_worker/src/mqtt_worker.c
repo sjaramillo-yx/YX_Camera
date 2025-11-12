@@ -11,7 +11,7 @@
 #include "provision_claimer.h"
 
 static const char *TAG = "MQTT Worker"; /**< Logging tag for this module. */
-
+/*================= Globals =================*/
 /**
  * @name Certificates
  * @brief Certs included in the binary image.
@@ -20,6 +20,8 @@ static const char *TAG = "MQTT Worker"; /**< Logging tag for this module. */
 extern const uint8_t client_cert_pem_start[] asm("_binary_client_crt_start");
 extern const uint8_t client_key_pem_start[] asm("_binary_client_key_start");
 extern const uint8_t server_cert_pem_start[] asm("_binary_amazon_pem_start");
+
+static cert_data_t mqtt_cert_data;
 /** @} */
 
 /**
@@ -39,6 +41,32 @@ static esp_mqtt_client_config_t mqtt_cfg = {
     .buffer      = {.size = 8192, .out_size = 8192}};
 
 /**
+ * @brief The initialization semaphore
+ */
+static SemaphoreHandle_t mqtt_init_semphr = NULL;
+
+/*================== Event Handlers ==================*/
+/**
+ * @brief The handler for the `MQTT_EVENT_CONNECTED` event
+ *
+ * @param handler_args user data registered to the event.
+ * @param base Event base for the handler(always MQTT Base in this case).
+ * @param event_id The id for the received event.
+ * @param event_data The data for the event, esp_mqtt_event_handle_t.
+ */
+static void mqtt_connected_handler(void *handler_args, esp_event_base_t base, int32_t event_id,
+                                   void *event_data) {
+  ESP_LOGD(TAG, "Connected to MQTT broker");
+  esp_mqtt_event_handle_t  event  = event_data;
+  esp_mqtt_client_handle_t client = event->client;
+  int                      msg_id;
+
+  // Give the initialization semaphore
+  xSemaphoreGive(mqtt_init_semphr);
+}
+
+/*================== Statics ==================*/
+/**
  * @brief initialize the MQTT client with default certificates (pre-provisioning)
  */
 static esp_err_t mqttworker_defaults(void) {
@@ -51,6 +79,7 @@ static esp_err_t mqttworker_defaults(void) {
   return client != NULL ? ESP_OK : ESP_FAIL;
 }
 
+/*================== Public Functions ==================*/
 esp_err_t mqttworker_begin(void) {
   /* Check if certificates are in NVS */
   esp_err_t err = nvsman_begin();
@@ -63,5 +92,40 @@ esp_err_t mqttworker_begin(void) {
     }
     err = provision_begin(client);
   }
+  err = nvsman_get_certs(&mqtt_cert_data);
+  ESP_LOGD(TAG, "ThingName is %s", mqtt_cert_data.thing_name);
+  mqtt_cfg.credentials.authentication.certificate = (const char *)mqtt_cert_data.client_crt;
+  mqtt_cfg.credentials.authentication.key         = (const char *)mqtt_cert_data.client_key;
+  client                                          = esp_mqtt_client_init(&mqtt_cfg);
+
+  /* Register the event handlers */
+  esp_mqtt_client_register_event(client, MQTT_EVENT_CONNECTED, mqtt_connected_handler, NULL);
+  /* Create the initialization semaphore */
+  mqtt_init_semphr = xSemaphoreCreateBinary();
+  /* Start MQTT event loop */
+  esp_mqtt_client_start(client);
+  /* Wait for the client to stablish a connection */
+  xSemaphoreTake(mqtt_init_semphr, portMAX_DELAY);
+
   return err;
+}
+
+esp_err_t mqttworker_publish_initial_state(cJSON *sdJSON) {
+  esp_err_t      ret     = ESP_OK;
+  cJSON         *payload = cJSON_CreateObject();
+  struct timeval system_time;
+
+  /* Get information */
+  esp_app_desc_t *app_description = (esp_app_desc_t *)esp_app_get_description();
+  gettimeofday(&system_time, NULL);
+  /* Build the payload */
+  cJSON_AddStringToObject(payload, "thingName", mqtt_cert_data.thing_name);
+  cJSON_AddNumberToObject(payload, "deviceTime", (uint64_t)system_time.tv_sec);
+  cJSON_AddItemToObject(payload, "sdCardInfo", sdJSON);
+  cJSON_AddStringToObject(payload, "firmwareVersion", esp_app_get_description()->version);
+  int msg_id = esp_mqtt_client_publish(client, "cameras/status", cJSON_Print(payload), 0, 1, 0);
+  ESP_LOGD(TAG, "sent publish successful, msg_id=%d", msg_id);
+  cJSON_Delete(payload);
+  return ret;
+  /// TODO: Handle errors
 }
