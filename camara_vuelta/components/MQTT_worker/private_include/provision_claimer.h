@@ -45,11 +45,6 @@ typedef enum {
 } ClaimerState;
 
 /**
- * @brief The state of the state machine
- */
-static ClaimerState claimer_state = UNINITIALIZED;
-
-/**
  * @brief Provision the device by claim
  *
  * @param client
