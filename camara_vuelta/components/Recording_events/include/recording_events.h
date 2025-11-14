@@ -51,16 +51,17 @@ typedef struct {
   uint32_t target_bitrate;       // Target bitrate in bits per second
   char     transaction_id[128];  // Transaction ID for this recording
   bool     has_aws_job;          // Wether an AWS job is associated to this recorrding
-  char     aws_job_id[65]        // Associated AWS job ID for this recording (if any)
+  char     aws_job_id[65];       // Associated AWS job ID for this recording (if any)
 } recording_conf_t;
 
 /**
  * @brief Recording resulting file data structure
  */
 typedef struct {
-  char     filename[128];     // Name of the file where the recording was saved to
-  uint64_t size;              // Size in bytes of the resulting file
-  uint64_t recorded_seconds;  // How many seconds long the recording was
+  char     transaction_id[128];  // Transaction ID associated with this file
+  char     filename[128];        // Name of the file where the recording was saved to
+  uint64_t size;                 // Size in bytes of the resulting file
+  uint64_t recorded_seconds;     // How many seconds long the recording was
 } recording_file_t;
 
 /**

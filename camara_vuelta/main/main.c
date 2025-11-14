@@ -6,6 +6,8 @@
 #include <cJSON.h>
 /* FreeRTOS includes*/
 /* Custom includes */
+#include "recording_events.h"
+ESP_EVENT_DEFINE_BASE(RECORDING_EVENTS);  // Event base must be declared here (not sure why)
 #include "SD_manager.h"
 #include "ethernet_manager.h"
 #include "mqtt_worker.h"
@@ -26,6 +28,10 @@ void app_main(void) {
   esp_log_level_set("Provision Claimer", ESP_LOG_INFO);
   esp_log_level_set("MQTT Worker", ESP_LOG_DEBUG);
   esp_log_level_set("NVS Manager", ESP_LOG_INFO);
+  esp_log_level_set("Video Manager", ESP_LOG_DEBUG);
+
+  // Create the recording event loop
+  rec_eventloop_create();
 
   // Initialize ethernet
   esp_eth_handle_t eth_handle;
@@ -36,12 +42,13 @@ void app_main(void) {
   }
 
   // Mount the SD Card
-  sdman_mount();
+  esp_err_t sd_mounted = sdman_mount();
   // Initialize the Video Manager
-  vman_init();
+  esp_err_t vman_inited = vman_init();
 
   // Get information about the SD Card
   cJSON *sdJSON;
   sdman_getJSON(&sdJSON);
+  // Publish initial state
   mqttworker_publish_initial_state(sdJSON);  // This also frees the memory for sdJSON
 }

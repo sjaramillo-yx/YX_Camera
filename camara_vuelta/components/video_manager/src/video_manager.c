@@ -433,10 +433,10 @@ static void vman_rec_handler(void *handler_arg, esp_event_base_t event_base, int
       /// TODO: Handle errors here
       break;
     }
+    rec_conf = *rec_params;
+    strcpy(rec_file.transaction_id, rec_conf.transaction_id);
     esp_event_post_to(rec_event_h, RECORDING_EVENTS, REC_STARTED, (void *)&rec_conf,
                       sizeof(rec_conf), 100);
-    /// TODO: Check if this works
-    rec_conf = *rec_params;
     break;
   case REC_STOP:
     stop_id = (char *)event_data;
@@ -446,15 +446,24 @@ static void vman_rec_handler(void *handler_arg, esp_event_base_t event_base, int
                stop_id, rec_conf.transaction_id);
       rec_error.error_code = ESP_ERR_INVALID_ARG;
       snprintf(rec_error.error_message, sizeof(rec_error.error_message),
-               "Mismatched transaction ID");
+               "Mismatched transaction ID: current=%s, received=%s", rec_conf.transaction_id,
+               stop_id);
       snprintf(rec_error.errored_module, sizeof(rec_error.errored_module), TAG);
       esp_event_post_to(rec_event_h, RECORDING_EVENTS, REC_ERROR, (void *)&rec_error,
                         sizeof(rec_error), 100);
       break;
     }
-    vman_stop_recording();
-    esp_event_post_to(rec_event_h, RECORDING_EVENTS, REC_DONE, (void *)&rec_file, sizeof(rec_file),
-                      100);
+    if ((rec_error.error_code = vman_stop_recording()) == ESP_OK) {
+      esp_event_post_to(rec_event_h, RECORDING_EVENTS, REC_DONE, (void *)&rec_file,
+                        sizeof(rec_file), 100);
+    } else {
+      snprintf(rec_error.error_message, sizeof(rec_error.error_message),
+               "Couldn't stop recording with ID %s", stop_id);
+      snprintf(rec_error.errored_module, sizeof(rec_error.errored_module), TAG);
+      esp_event_post_to(rec_event_h, RECORDING_EVENTS, REC_ERROR, (void *)&rec_error,
+                        sizeof(rec_error), 100);
+      break;
+    }
     break;
   default:
     break;

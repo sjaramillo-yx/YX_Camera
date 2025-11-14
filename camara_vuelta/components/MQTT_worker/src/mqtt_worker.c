@@ -105,7 +105,7 @@ static void mqtt_data_handler(void *handler_args, esp_event_base_t base, int32_t
   received_topic[event->topic_len] = '\0';
   ESP_LOGD(TAG, "Received data from MQTT topic %s", received_topic);
 
-  /* -- Recording start notification --*/
+  /* -- Recording start command --*/
   snprintf(topic_name, 1024, "yx/recordings/%s/start", mqtt_cert_data.thing_name);
   if (!strcmp(received_topic, topic_name)) {
     /// TODO: Encapsulate this in a helper function
@@ -161,7 +161,7 @@ static void mqtt_data_handler(void *handler_args, esp_event_base_t base, int32_t
       esp_event_post_to(rec_event_h, RECORDING_EVENTS, REC_BEGIN, (void *)&rec_conf,
                         sizeof(rec_conf), 100);
       // Subscribe to relevant topic
-      snprintf(topic_name, 1024, "yx/recordings/%s/%s", mqtt_cert_data.thing_name,
+      snprintf(topic_name, 1024, "yx/recordings/%s/%s/commands", mqtt_cert_data.thing_name,
                rec_conf.transaction_id);
       esp_mqtt_client_subscribe(client, topic_name, 0);
     }
@@ -170,7 +170,7 @@ static void mqtt_data_handler(void *handler_args, esp_event_base_t base, int32_t
   }
 
   /* -- In progress recording topic --*/
-  snprintf(topic_name, 1024, "yx/recordings/%s/%s", mqtt_cert_data.thing_name,
+  snprintf(topic_name, 1024, "yx/recordings/%s/%s/commands", mqtt_cert_data.thing_name,
            rec_conf.transaction_id);
   if (!strcmp(received_topic, topic_name)) {
     // Get the payload
@@ -198,29 +198,66 @@ static void mqtt_data_handler(void *handler_args, esp_event_base_t base, int32_t
 static void mqttworker_rec_handler(void *handler_arg, esp_event_base_t event_base, int32_t event_id,
                                    void *event_data) {
   ESP_LOGI(TAG, "Received event %s:%d", (char *)event_base, event_id);
-  recording_conf_t *vman_rec_params  = (recording_conf_t *)event_data;
-  cJSON            *payload          = cJSON_CreateObject();
-  char              topic_name[1024] = "";
-  int               msg_id;
+  recording_conf_t  *vman_rec_params;
+  recording_file_t  *vman_rec_file;
+  recording_error_t *vman_rec_error;
+  cJSON             *payload = cJSON_CreateObject();
+  cJSON             *qps;
+  cJSON             *res;
+  char               topic_name[1024] = "";
+  int                msg_id;
   switch (event_id) {
   case REC_STARTED:
+    vman_rec_params = (recording_conf_t *)event_data;
     ESP_LOGI(TAG, "Video Manager started recording with ID %s", vman_rec_params->transaction_id);
-    snprintf(topic_name, 1024, "yx/recordings/%s/%s", mqtt_cert_data.thing_name,
-             rec_conf.transaction_id);
-    /// TODO: Build payload for this message
+    qps = cJSON_AddArrayToObject(payload, "QPs");
+    res = cJSON_AddArrayToObject(payload, "resolution");
     cJSON_AddStringToObject(payload, "status", "STARTED");
     cJSON_AddStringToObject(payload, "transactionId", vman_rec_params->transaction_id);
-    /// TODO: Add the rest of the attributes here
+    cJSON_AddItemToArray(qps, cJSON_CreateNumber(vman_rec_params->qp_min));
+    cJSON_AddItemToArray(qps, cJSON_CreateNumber(vman_rec_params->qp_max));
+    cJSON_AddItemToArray(res, cJSON_CreateNumber(vman_rec_params->hres));
+    cJSON_AddItemToArray(res, cJSON_CreateNumber(vman_rec_params->vres));
+    cJSON_AddNumberToObject(payload, "fps", vman_rec_params->fps);
+    cJSON_AddNumberToObject(payload, "targetBitrate", vman_rec_params->target_bitrate);
+    cJSON_AddNumberToObject(payload, "timeout", vman_rec_params->timeout_seconds);
+    snprintf(topic_name, 1024, "yx/recordings/%s/%s/status", mqtt_cert_data.thing_name,
+             rec_conf.transaction_id);
     msg_id = esp_mqtt_client_publish(client, topic_name, cJSON_Print(payload), 0, 1, 0);
     ESP_LOGD(TAG, "sent publish successful, msg_id=%d", msg_id);
-    cJSON_Delete(payload);
+    break;
+
+  case REC_DONE:
+    vman_rec_file = (recording_file_t *)event_data;
+    cJSON_AddStringToObject(payload, "status", "DONE");
+    cJSON_AddStringToObject(payload, "transactionId", rec_conf.transaction_id);
+    cJSON_AddStringToObject(payload, "filename", vman_rec_file->filename);
+    cJSON_AddNumberToObject(payload, "filesize", vman_rec_file->size);
+    cJSON_AddNumberToObject(payload, "recordedSeconds", vman_rec_file->recorded_seconds);
+    snprintf(topic_name, 1024, "yx/recordings/%s/%s/status", mqtt_cert_data.thing_name,
+             rec_conf.transaction_id);
+    msg_id = esp_mqtt_client_publish(client, topic_name, cJSON_Print(payload), 0, 1, 0);
+    ESP_LOGD(TAG, "sent publish successful, msg_id=%d", msg_id);
+    // Unsubscribe from the recording topic
+    esp_mqtt_client_unsubscribe(client, topic_name);
     break;
 
   case REC_ERROR:
-    ESP_LOGI(TAG, "Video Manager reported error in recording with ID %s",
-             vman_rec_params->transaction_id);
+    vman_rec_error = (recording_error_t *)event_data;
+    ESP_LOGI(TAG, "Module %s reported error 0x%02x (%s)", vman_rec_error->errored_module,
+             vman_rec_error->error_code, vman_rec_error->error_message);
+    cJSON_AddStringToObject(payload, "status", "ERROR");
+    cJSON_AddStringToObject(payload, "thingName", mqtt_cert_data.thing_name);
+    cJSON_AddStringToObject(payload, "errorCode", esp_err_to_name(vman_rec_error->error_code));
+    cJSON_AddStringToObject(payload, "errorMessage", vman_rec_error->error_message);
+    cJSON_AddStringToObject(payload, "errorOrigin", vman_rec_error->errored_module);
+    /// TODO: Publish to recording status topic instead of global error topic
+    msg_id = esp_mqtt_client_publish(client, "yx/cameras/errors", cJSON_Print(payload), 0, 1, 0);
+    ESP_LOGD(TAG, "sent publish successful, msg_id=%d", msg_id);
     break;
   }
+
+  cJSON_Delete(payload);
 }
 
 /*================== Statics ==================*/
@@ -251,8 +288,8 @@ esp_err_t mqttworker_begin(void) {
       /// TODO: Handle errors
     }
     err = provision_begin(client);
-    xSemaphoreTake(mqtt_init_semphr, portMAX_DELAY);
   }
+  /// TODO: Catch other errors (not only ESP_ERR_NVS_NOT_FOUND)
   err = nvsman_get_certs(&mqtt_cert_data);
   ESP_LOGD(TAG, "ThingName is %s", mqtt_cert_data.thing_name);
   mqtt_cfg.credentials.authentication.certificate = (const char *)mqtt_cert_data.client_crt;
