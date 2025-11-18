@@ -192,6 +192,7 @@ static void mqtt_data_handler(void *handler_args, esp_event_base_t base, int32_t
       esp_event_post_to(rec_event_h, RECORDING_EVENTS, REC_STOP, (void *)rec_stop_id,
                         sizeof(rec_stop_id), 100);
     }
+    cJSON_Delete(payload);
   }
 }
 
