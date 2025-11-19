@@ -8,7 +8,8 @@
 
 #include "ethernet_manager.h"
 
-static const char *TAG = "Ethernet Manager" /**< Logging tag for this module. */;
+static const char       *TAG       = "Ethernet Manager" /**< Logging tag for this module. */;
+static SemaphoreHandle_t ip_semphr = NULL;
 
 /**
  * @brief A simple handler for the IP obtained that starts the SNTP synchronization flow
@@ -17,6 +18,7 @@ static void got_ip_event_handler(void *arg, esp_event_base_t event_base, int32_t
                                  void *event_data) {
   esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
   esp_netif_sntp_init(&config);
+  xSemaphoreGiveFromISR(ip_semphr, NULL);
 }
 
 /**
@@ -80,6 +82,8 @@ esp_err_t ethman_init(esp_eth_handle_t *eth_handle_out) {
   esp_eth_mac_t    *mac         = NULL;
   esp_eth_phy_t    *phy         = NULL;
   uint8_t           mac_addr[6] = {0};
+  /* Create IP semaphore */
+  ip_semphr = xSemaphoreCreateBinary();
   /* Initialize Ethernet */
   ESP_GOTO_ON_FALSE(eth_handle_out != NULL, ESP_ERR_INVALID_ARG, err, TAG,
                     "invalid arguments: ethernet handle is already initialized!");
@@ -110,6 +114,8 @@ esp_err_t ethman_init(esp_eth_handle_t *eth_handle_out) {
   ESP_LOGD(TAG, "Created Ethernet interface with MAC Address: %02x:%02x:%02x:%02x:%02x:%02x",
            mac_addr[0], mac_addr[1], mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
   *eth_handle_out = eth_handle;
+  ESP_LOGI(TAG, "Waiting for IP address");
+  xSemaphoreTake(ip_semphr, portMAX_DELAY);
   return ret;
 
 err:

@@ -25,6 +25,8 @@
 #include <esp_system.h>
 /* Standard includes*/
 /* FreeRTOS includes*/
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 /* Custom includes */
 
 #ifdef __cplusplus
