@@ -58,6 +58,13 @@ esp_err_t vman_start_recording(char *filename);
  */
 esp_err_t vman_stop_recording(void);
 
+/**
+ * @brief Write sensor information to a cJSON object
+ *
+ * @param[out] vmanJSON A pointer to the cJSON structure where the information should be saved to
+ */
+esp_err_t vman_getJSON(cJSON **vmanJSON);
+
 #ifdef __cplusplus
 }
 #endif

@@ -49,6 +49,9 @@ void app_main(void) {
   // Get information about the SD Card
   cJSON *sdJSON;
   sdman_getJSON(&sdJSON);
+  /// Get information about the Video Manager
+  cJSON *vmanJSON;
+  vman_getJSON(&vmanJSON);
   // Publish initial state
-  mqttworker_publish_initial_state(sdJSON);  // This also frees the memory for sdJSON
+  mqttworker_publish_initial_state(sdJSON, vmanJSON);  // This also frees cJSON memory
 }

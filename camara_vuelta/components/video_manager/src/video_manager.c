@@ -677,3 +677,49 @@ cleanup:
 fail:
   return ret;
 }
+
+esp_err_t vman_getJSON(cJSON **vmanJSON) {
+  esp_err_t ret = ESP_FAIL;
+  /// TODO: Cleanup in case of error
+  *vmanJSON = cJSON_CreateObject();
+  if (*vmanJSON == NULL)
+    goto end;
+
+  cJSON *sensor_info = cJSON_AddObjectToObject(*vmanJSON, "sensor");
+  if (sensor_info == NULL)
+    goto end;
+
+  // Sensor name
+  cJSON_AddStringToObject(sensor_info, "name", s_cam_dev->name);
+
+  // Current Format
+  cJSON *curr_format = cJSON_AddObjectToObject(sensor_info, "currentFormat");
+  if (curr_format == NULL)
+    goto end;
+  cJSON *res = cJSON_AddArrayToObject(curr_format, "resolution");
+  if (res == NULL)
+    goto end;
+  cJSON_AddItemToArray(res, cJSON_CreateNumber(s_cam_dev->cur_format->width));
+  cJSON_AddItemToArray(res, cJSON_CreateNumber(s_cam_dev->cur_format->height));
+  cJSON_AddNumberToObject(curr_format, "fps", s_cam_dev->cur_format->fps);
+
+  // Available Formats
+  cJSON                        *formats = cJSON_AddArrayToObject(sensor_info, "availableFormats");
+  esp_cam_sensor_format_array_t cam_fmt_array = {0};
+  esp_cam_sensor_query_format(s_cam_dev, &cam_fmt_array);
+  const esp_cam_sensor_format_t *parray = cam_fmt_array.format_array;
+  for (int i = 0; i < cam_fmt_array.count; i++) {
+    cJSON_AddItemToArray(formats, curr_format = cJSON_CreateObject());
+    cJSON_AddStringToObject(curr_format, "name", parray[i].name);
+    res = cJSON_AddArrayToObject(curr_format, "resolution");
+    cJSON_AddItemToArray(res, cJSON_CreateNumber(parray[i].width));
+    cJSON_AddItemToArray(res, cJSON_CreateNumber(parray[i].height));
+    cJSON_AddNumberToObject(curr_format, "fps", parray[i].fps);
+  }
+
+  return ESP_OK;
+
+end:
+  /// TODO: Cleanup
+  return ret;
+}
