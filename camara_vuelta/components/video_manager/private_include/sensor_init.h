@@ -50,6 +50,12 @@ void sensor_init(example_sensor_config_t  *sensor_config,
  */
 void example_sensor_deinit(example_sensor_handle_t sensor_handle);
 
+/**
+ * @brief Configure the sensor's resolution and FPS
+ */
+esp_err_t set_sensor_format(uint16_t hres, uint16_t vres, uint16_t *fps,
+                            esp_cam_sensor_device_t *dev);
+
 #ifdef __cplusplus
 }
 #endif

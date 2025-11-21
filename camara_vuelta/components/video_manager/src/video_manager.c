@@ -21,18 +21,18 @@ typedef struct {
 
 /*================ Parameters ================*/
 /** TODO: Turn this into Kconfig options */
-#define HRES                   1920
-#define VRES                   1080
-#define CSI_LANES              2
-#define CSI_LANE_BITRATE_MBPS  450  // requested per-lane bitrate
-#define CSI_INPUT_COLOR        CAM_CTLR_COLOR_RAW10
-#define CSI_OUTPUT_COLOR       CAM_CTLR_COLOR_YUV420  // encoder expects YUV or I420
-#define BYTES_PER_PIXEL_YUV420 1.5                    // YUYV
-#define BYTES_PER_FRAME        3110400                // 1920 * 1080 * 1.5
+#define DEFAULT_HRES            1920
+#define DEFAULT_VRES            1080
+#define DEFAULT_FPS             30
+#define CSI_LANES               2
+#define CSI_LANE_BITRATE_MBPS   450  // requested per-lane bitrate
+#define CSI_INPUT_COLOR         CAM_CTLR_COLOR_RAW10
+#define CSI_OUTPUT_COLOR        CAM_CTLR_COLOR_YUV420  // encoder expects YUV or I420
+#define BYTES_PER_PIXEL_YUV420  1.5                    // YUYV
+#define DEFAULT_BYTES_PER_FRAME 3110400                // 1920 * 1080 * 1.5
+#define DEFAULT_ENCODER_BYTES   (DEFAULT_HRES * DEFAULT_VRES * 2)
 
 // H.264 configuration
-#define H264_FPS    30
-#define H264_GOP    30
 #define H264_FORMAT ESP_H264_RAW_FMT_O_UYY_E_VYY
 
 // Buffering
@@ -45,9 +45,6 @@ typedef struct {
 static const uint64_t STAGE_SIZE = CONFIG_VMAN_STAGE_SIZE_KB << 10;  // Size in bytes of stages
 static const uint64_t STAGE_LIMIT =
     STAGE_SIZE * CONFIG_VMAN_STAGE_LIMIT / 100;  // Threshold for staging buffers
-
-// File path (assumes SD is mounted at /sdcard)
-#define OUTPUT_PATH "/sdcard/cap.bin"
 
 /*================= Globals =================*/
 
@@ -64,8 +61,9 @@ typedef struct {
 
 static volatile bool s_primed = false;
 
-// CSI frame buffer size
-static const size_t FRAME_BYTES = ALIGN_UP((size_t)BYTES_PER_FRAME, 64);
+// CSI and H264 frame buffer size
+static const size_t MAX_FRAME_BYTES = ALIGN_UP((size_t)DEFAULT_BYTES_PER_FRAME, 64);
+static const size_t MAX_ENC_BYTES   = ALIGN_UP((size_t)DEFAULT_ENCODER_BYTES, 64);
 
 // Buffers for the CSI frames and encoder output
 static uint8_t                 *s_frame_bufs[FRAME_BUF_COUNT];  // CSI DMAable YUV buffers
@@ -88,17 +86,58 @@ static TaskHandle_t s_write_sink_h = NULL;  // The task in charge of writing to 
 /// TODO: Change handle names
 static TaskHandle_t write_task, capture;
 
-// Camera handle
-static esp_cam_ctlr_handle_t    s_cam = NULL;
+// General configurations
+static size_t   s_frame_bytes = MAX_FRAME_BYTES;
+static size_t   s_enc_bytes   = DEFAULT_ENCODER_BYTES;
+static uint16_t s_hres        = DEFAULT_HRES;
+static uint16_t s_vres        = DEFAULT_VRES;
+static uint16_t s_fps         = DEFAULT_FPS;
+
+// Camera handle and configurations
 static esp_cam_sensor_device_t *s_cam_dev;
+static example_sensor_config_t  cam_sensor_config = {
+     .i2c_port_num   = I2C_NUM_0,
+     .i2c_sda_io_num = GPIO_NUM_7,
+     .i2c_scl_io_num = GPIO_NUM_8,
+     .port           = ESP_CAM_SENSOR_MIPI_CSI,
+     .format_name    = "MIPI_2lane_24Minput_RAW10_1920x1080_30fps",
+};
+
+// CSI
+static esp_cam_ctlr_handle_t     s_cam   = NULL;
+static esp_cam_ctlr_csi_config_t csi_cfg = {
+    .ctlr_id                = 0,
+    .h_res                  = DEFAULT_HRES,
+    .v_res                  = DEFAULT_VRES,
+    .lane_bit_rate_mbps     = CSI_LANE_BITRATE_MBPS,
+    .input_data_color_type  = CSI_INPUT_COLOR,
+    .output_data_color_type = CSI_OUTPUT_COLOR,
+    .data_lane_num          = CSI_LANES,
+    .byte_swap_en           = false,
+    .queue_items            = FRAME_BUF_COUNT,  // >1 helps continuous capture
+};
+
+// ISP handle and configuration
+static isp_proc_handle_t       s_isp_proc = NULL;
+static esp_isp_processor_cfg_t isp_config = {
+    .clk_hz                 = 80 * 1000 * 1000,
+    .input_data_source      = ISP_INPUT_DATA_SOURCE_CSI,
+    .input_data_color_type  = ISP_COLOR_RAW10,
+    .output_data_color_type = ISP_COLOR_YUV420,
+    .has_line_start_packet  = false,
+    .has_line_end_packet    = false,
+    .h_res                  = DEFAULT_HRES,
+    .v_res                  = DEFAULT_VRES,
+    .bayer_order            = COLOR_RAW_ELEMENT_ORDER_GBRG,
+};
 
 // H.264 encoder handle and configuration
 static esp_h264_enc_handle_t s_enc   = NULL;
 static esp_h264_enc_cfg_hw_t enc_cfg = {
-    .gop      = H264_GOP,
-    .fps      = H264_FPS,
-    .res      = {.width = HRES, .height = VRES},
-    .rc       = {.bitrate = HRES * VRES * 1.5 * 8 * 30 / 100, .qp_min = 25, .qp_max = 36},
+    .gop = DEFAULT_FPS,
+    .fps = DEFAULT_FPS,
+    .res = {.width = DEFAULT_HRES, .height = DEFAULT_VRES},
+    .rc = {.bitrate = DEFAULT_HRES * DEFAULT_VRES * 1.5 * 8 * 30 / 100, .qp_min = 25, .qp_max = 36},
     .pic_type = H264_FORMAT,
 };
 
@@ -117,16 +156,6 @@ static recording_conf_t        rec_conf;
 static recording_error_t       rec_error;
 static recording_file_t        rec_file;
 static esp_event_loop_handle_t rec_event_h;
-
-/*================== Statics ==================*/
-// Helper function to allocate aligned memory with error checking
-static void *allocate_frame_buffer(size_t size, uint32_t *actual_size, const char *buffer_name) {
-  void *buffer = esp_h264_aligned_calloc(16, 1, size, actual_size, ESP_H264_MEM_SPIRAM);
-  if (!buffer) {
-    ESP_LOGE(TAG, "Failed to allocate %s buffer memory (%zu bytes)", buffer_name, size);
-  }
-  return buffer;
-}
 
 /*========================= ISR Callbacks =========================*/
 
@@ -149,6 +178,124 @@ static bool my_async_memcpy_cb(async_memcpy_handle_t mcp_hdl, async_memcpy_event
 static bool IRAM_ATTR on_trans_finished(esp_cam_ctlr_handle_t h, esp_cam_ctlr_trans_t *t,
                                         void *user_ctx) {
   return false;
+}
+
+static esp_cam_ctlr_evt_cbs_t cbs = {.on_trans_finished = on_trans_finished};
+
+/*================== Statics ==================*/
+// Helper function to allocate aligned memory with error checking
+static void *allocate_frame_buffer(size_t size, uint32_t *actual_size, const char *buffer_name) {
+  void *buffer = esp_h264_aligned_calloc(16, 1, size, actual_size, ESP_H264_MEM_SPIRAM);
+  if (!buffer) {
+    ESP_LOGE(TAG, "Failed to allocate %s buffer memory (%zu bytes)", buffer_name, size);
+  }
+  return buffer;
+}
+
+static esp_err_t update_active_format(uint16_t hres, uint16_t vres, uint16_t fps) {
+  // Check that the required frame bytes fit in the buffers
+  size_t required_frame_bytes =
+      ALIGN_UP((size_t)((size_t)hres * vres * BYTES_PER_PIXEL_YUV420), 64);
+  ESP_RETURN_ON_FALSE(required_frame_bytes <= MAX_FRAME_BYTES, ESP_ERR_NO_MEM, TAG,
+                      "Requested resolution %ux%u needs %zu bytes but only %zu are available", hres,
+                      vres, required_frame_bytes, MAX_FRAME_BYTES);
+
+  // Check that the required encoder bytes fit in the buffers
+  size_t required_enc_bytes = (size_t)hres * vres * 2;
+  ESP_RETURN_ON_FALSE(
+      required_enc_bytes <= s_enc_bytes, ESP_ERR_NO_MEM, TAG,
+      "Requested resolution %ux%u needs %zu encoder bytes but only %zu are available", hres, vres,
+      required_enc_bytes, s_enc_bytes);
+
+  // Save the configurations to static variables
+  s_hres        = hres;
+  s_vres        = vres;
+  s_fps         = fps;
+  s_frame_bytes = required_frame_bytes;
+
+  // Configure the encoder
+  enc_cfg.res.width  = hres;
+  enc_cfg.res.height = vres;
+  enc_cfg.fps        = fps;
+  enc_cfg.gop        = fps;
+
+  return ESP_OK;
+}
+
+static esp_err_t vman_configure_resolution(uint16_t hres, uint16_t vres, uint16_t fps) {
+  esp_err_t ret        = ESP_OK;
+  uint16_t  active_fps = fps;
+
+  ESP_GOTO_ON_FALSE(!recording, ESP_ERR_INVALID_STATE, fail, TAG,
+                    "Cannot change resolution while recording");
+  ESP_GOTO_ON_FALSE(s_cam_dev, ESP_ERR_INVALID_STATE, fail, TAG, "Sensor not initialized");
+
+  // Disable the sensor stream before reconfiguring
+  int stream_flag = 0;
+  if (esp_cam_sensor_ioctl(s_cam_dev, ESP_CAM_SENSOR_IOC_S_STREAM, &stream_flag) != ESP_OK) {
+    ESP_LOGW(TAG, "Failed to stop sensor stream before reconfiguration");
+  }
+
+  // Tear down the CSI controller
+  if (s_cam) {
+    esp_cam_ctlr_disable(s_cam);
+    esp_cam_ctlr_del(s_cam);
+    s_cam = NULL;
+  }
+
+  // Tear down the ISP
+  if (s_isp_proc) {
+    esp_isp_disable(s_isp_proc);
+    esp_isp_del_processor(s_isp_proc);
+    s_isp_proc = NULL;
+  }
+
+  // Attempt to set the sensor format
+  ESP_GOTO_ON_ERROR(set_sensor_format(hres, vres, &active_fps, s_cam_dev), fail, TAG,
+                    "Failed to configure sensor format");
+  ESP_GOTO_ON_ERROR(update_active_format(hres, vres, active_fps), fail, TAG,
+                    "Requested video format is not supported by current buffers");
+
+  // Configure and create a new CSI controller
+  csi_cfg.h_res = hres;
+  csi_cfg.v_res = vres;
+  ESP_GOTO_ON_ERROR(esp_cam_new_csi_ctlr(&csi_cfg, &s_cam), fail, TAG,
+                    "Failed to create CSI controller");
+  ESP_GOTO_ON_ERROR(esp_cam_ctlr_register_event_callbacks(s_cam, &cbs, NULL), fail, TAG,
+                    "Failed to register CSI callbacks");
+
+  // Configure and create a new ISP
+  isp_config.h_res = hres;
+  isp_config.v_res = vres;
+  ESP_GOTO_ON_ERROR(esp_isp_new_processor(&isp_config, &s_isp_proc), fail, TAG,
+                    "Failed to create ISP");
+  ESP_GOTO_ON_ERROR(esp_isp_enable(s_isp_proc), fail, TAG, "Failed to enable ISP");
+
+  // Enable the CSI controller
+  ESP_GOTO_ON_ERROR(esp_cam_ctlr_enable(s_cam), fail, TAG, "Couldn't enable the camera controller");
+
+  // Log the new configuration
+  ESP_LOGI(TAG, "Configured video pipeline for %ux%u @ %u fps", hres, vres, active_fps);
+  // Re-enable the sensor stream
+  stream_flag = 1;
+  ESP_GOTO_ON_ERROR(esp_cam_sensor_ioctl(s_cam_dev, ESP_CAM_SENSOR_IOC_S_STREAM, &stream_flag),
+                    fail, TAG, "Failed to enable sensor stream after reconfiguration");
+  return ESP_OK;
+
+fail:
+  return ret;
+}
+
+static void apply_encoder_runtime_config(const recording_conf_t *rec_params) {
+  uint16_t target_fps = rec_params->fps ? rec_params->fps : s_fps;
+
+  // If the recording parameters include target bitrate, use it. If not, calculate a new one
+  enc_cfg.rc.bitrate =
+      rec_params->target_bitrate
+          ? rec_params->target_bitrate
+          : rec_params->hres * rec_params->vres * BYTES_PER_PIXEL_YUV420 * 8 * target_fps / 100;
+  enc_cfg.rc.qp_max = rec_params->qp_max;
+  enc_cfg.rc.qp_min = rec_params->qp_min;
 }
 
 /*========================= Tasks =========================*/
@@ -297,7 +444,7 @@ static void capture_encode_task(void *arg) {
     xQueueReceive(s_free_frame_q, &frame, portMAX_DELAY);
     esp_cam_ctlr_trans_t trans = {
         .buffer = frame,
-        .buflen = FRAME_BYTES,
+        .buflen = s_frame_bytes,
     };
     // Ask the camera sensor to fill the buffer
     ESP_LOGD(TAG, "Receiving transaction from sensor");
@@ -305,9 +452,9 @@ static void capture_encode_task(void *arg) {
 
     // Build input frame view for encoder from the received bytes
     esp_h264_enc_in_frame_t in = {0};
-    in.pts             = (frame_idx * 1000U) / H264_FPS;  // ms timebase is fine for raw stream
-    in.raw_data.buffer = frame;
-    in.raw_data.len    = FRAME_BYTES;
+    in.pts                     = (frame_idx * 1000U) / s_fps;  // ms timebase is fine for raw stream
+    in.raw_data.buffer         = frame;
+    in.raw_data.len            = trans.received_size;
 
     // Encoded output container
     esp_h264_enc_out_frame_t *out;
@@ -349,10 +496,10 @@ static void allocate_pools(void) {
   // Allocate CSI frame buffers (DMA/PSRAM OK, 64-byte aligned)
   for (int i = 0; i < FRAME_BUF_COUNT; ++i) {
     s_frame_bufs[i] = (uint8_t *)heap_caps_aligned_alloc(
-        64, FRAME_BYTES, MALLOC_CAP_DMA | MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+        64, MAX_FRAME_BYTES, MALLOC_CAP_DMA | MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
 
     if (s_frame_bufs[i] == NULL) {
-      ESP_LOGE(TAG, "Failed to alloc frame buffer %d (%u bytes)", i, (unsigned)FRAME_BYTES);
+      ESP_LOGE(TAG, "Failed to alloc frame buffer %d (%u bytes)", i, (unsigned)MAX_FRAME_BYTES);
       abort();
     }
   }
@@ -361,7 +508,7 @@ static void allocate_pools(void) {
   uint32_t actual_size;
   uint32_t out_alignment = 0;
   esp_cache_get_alignment(MALLOC_CAP_SPIRAM, (size_t *)&out_alignment);
-  size_t frame_len = 1920 * 1080 * 2;
+  size_t frame_len = MAX_ENC_BYTES;
   for (int i = 0; i < ENC_BUF_COUNT; ++i) {
     s_enc_bufs[i].raw_data.buffer = allocate_frame_buffer(frame_len, &actual_size, "encoded frame");
     s_enc_bufs[i].raw_data.len    = actual_size;
@@ -370,6 +517,7 @@ static void allocate_pools(void) {
       abort();
     }
   }
+  s_enc_bytes = actual_size;
 }
 
 static void create_queues(void) {
@@ -399,12 +547,10 @@ static void create_queues(void) {
 static void vman_rec_handler(void *handler_arg, esp_event_base_t event_base, int32_t event_id,
                              void *event_data) {
   ESP_LOGI(TAG, "Received event %s:%d", (char *)event_base, event_id);
-  recording_conf_t              *rec_params;
-  esp_h264_enc_param_hw_handle_t param_hd;
-  uint8_t                        set_fps;
-  esp_err_t                      started = ESP_OK;
-  char                           rec_filename[128];
-  char                          *stop_id;
+  recording_conf_t *rec_params;
+  esp_err_t         started = ESP_OK;
+  char              rec_filename[128];
+  char             *stop_id;
   switch (event_id) {
   case REC_BEGIN:
     rec_params = (recording_conf_t *)event_data;
@@ -417,16 +563,21 @@ static void vman_rec_handler(void *handler_arg, esp_event_base_t event_base, int
     ESP_LOGI(TAG, "\t\tTransaction ID:%s", rec_params->transaction_id);
     ESP_LOGI(TAG, "\t\tTarget bitrate:%d", rec_params->target_bitrate);
     ESP_LOGI(TAG, "\t\tJob ID:%s", rec_params->aws_job_id);
-    // Set the encoder configuration
-    /// TODO: Configure the sensor or PPA also
-    /*
-    enc_cfg.fps        = rec_params->fps;
-    enc_cfg.res.height = rec_params->vres;
-    enc_cfg.res.width  = rec_params->hres;
-    enc_cfg.rc.bitrate = rec_params->target_bitrate;
-    enc_cfg.rc.qp_max  = rec_params->qp_max;
-    enc_cfg.rc.qp_min  = rec_params->qp_min;
-    */
+    // Reconfigure the video pipeline for the requested resolution
+    esp_err_t cfg_err =
+        vman_configure_resolution(rec_params->hres, rec_params->vres, rec_params->fps);
+    if (cfg_err != ESP_OK) {
+      rec_error.error_code = cfg_err;
+      snprintf(rec_error.error_message, sizeof(rec_error.error_message),
+               "Failed to configure resolution to %ux%u (%s)", rec_params->hres, rec_params->vres,
+               esp_err_to_name(cfg_err));
+      snprintf(rec_error.errored_module, sizeof(rec_error.errored_module), TAG);
+      esp_event_post_to(rec_event_h, RECORDING_EVENTS, REC_ERROR, (void *)&rec_error,
+                        sizeof(rec_error), 100);
+      break;
+    }
+
+    apply_encoder_runtime_config(rec_params);
     // Begin the recording
     snprintf(rec_filename, sizeof(rec_filename) + 4, "%s.bin", rec_params->transaction_id);
     started = vman_start_recording(rec_filename);
@@ -458,6 +609,7 @@ static void vman_rec_handler(void *handler_arg, esp_event_base_t event_base, int
       esp_event_post_to(rec_event_h, RECORDING_EVENTS, REC_DONE, (void *)&rec_file,
                         sizeof(rec_file), 100);
     } else {
+      ESP_LOGE(TAG, "Couldn't stop recording (%s)", esp_err_to_name(rec_error.error_code));
       snprintf(rec_error.error_message, sizeof(rec_error.error_message),
                "Couldn't stop recording with ID %s", stop_id);
       snprintf(rec_error.errored_module, sizeof(rec_error.errored_module), TAG);
@@ -495,58 +647,10 @@ esp_err_t vman_init(void) {
   ESP_ERROR_CHECK(esp_ldo_acquire_channel(&ldo_mipi_phy_config, &ldo_mipi_phy));
 
   //--------Camera Sensor and SCCB Init-----------//
-  example_sensor_handle_t sensor_handle = {
-      .sccb_handle    = NULL,
-      .i2c_bus_handle = NULL,
-  };
-  example_sensor_config_t cam_sensor_config = {
-      .i2c_port_num   = I2C_NUM_0,
-      .i2c_sda_io_num = GPIO_NUM_7,
-      .i2c_scl_io_num = GPIO_NUM_8,
-      .port           = ESP_CAM_SENSOR_MIPI_CSI,
-      .format_name    = "MIPI_2lane_24Minput_RAW10_1920x1080_30fps",
-  };
-  // example_sensor_init(&cam_sensor_config, &sensor_handle);
   sensor_init(&cam_sensor_config, &s_cam_dev);
 
-  // Configure and create the CSI controller
-  esp_cam_ctlr_csi_config_t cfg = {
-      .ctlr_id                = 0,
-      .h_res                  = HRES,
-      .v_res                  = VRES,
-      .lane_bit_rate_mbps     = CSI_LANE_BITRATE_MBPS,
-      .input_data_color_type  = CSI_INPUT_COLOR,
-      .output_data_color_type = CSI_OUTPUT_COLOR,
-      .data_lane_num          = CSI_LANES,
-      .byte_swap_en           = false,
-      .queue_items            = FRAME_BUF_COUNT,  // >1 helps continuous capture
-  };
-  ESP_ERROR_CHECK(esp_cam_new_csi_ctlr(&cfg, &s_cam));
-
-  // Register callbacks that hand buffers to the driver and notify on completion
-  esp_cam_ctlr_evt_cbs_t cbs = {.on_trans_finished = on_trans_finished};
-
-  //---------------ISP Init------------------//
-  isp_proc_handle_t       isp_proc   = NULL;
-  esp_isp_processor_cfg_t isp_config = {
-      .clk_hz                 = 80 * 1000 * 1000,
-      .input_data_source      = ISP_INPUT_DATA_SOURCE_CSI,
-      .input_data_color_type  = ISP_COLOR_RAW10,
-      .output_data_color_type = ISP_COLOR_YUV420,
-      .has_line_start_packet  = false,
-      .has_line_end_packet    = false,
-      .h_res                  = HRES,
-      .v_res                  = VRES,
-      .bayer_order            = COLOR_RAW_ELEMENT_ORDER_GBRG,
-  };
-  ESP_ERROR_CHECK(esp_isp_new_processor(&isp_config, &isp_proc));
-  ESP_ERROR_CHECK(esp_isp_enable(isp_proc));
-
-  //---------------Enable camera controller------------------//
-  /// TODO: Go to a fail tag instead of using ESP_ERROR_CHECK
-  ESP_ERROR_CHECK(esp_cam_ctlr_register_event_callbacks(s_cam, &cbs, NULL));
-  ESP_ERROR_CHECK(esp_cam_ctlr_enable(s_cam));
-  // ESP_ERROR_CHECK(esp_cam_ctlr_start(s_cam));
+  // Configure the pipeline
+  ESP_ERROR_CHECK(vman_configure_resolution(s_hres, s_vres, s_fps));
 
   //---------------FreeRTOS Tasks------------------//
   xTaskCreatePinnedToCore(write_to_sd_task, "vman.write.loop", 4096, NULL, 8, &write_task, 0);
@@ -647,7 +751,8 @@ esp_err_t vman_stop_recording(void) {
       ESP_LOGE(TAG, "SD write failed (%llu/%llu)", wrote, staging.active.staged);
     }
   }
-  rec_file.size = ftell(fp);
+  staging.active.staged = staging.inactive.staged = 0;
+  rec_file.size                                   = ftell(fp);
 
   // Clear the queues
   xQueueReset(s_free_encoded_q);
