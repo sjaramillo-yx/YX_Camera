@@ -89,7 +89,8 @@ static TaskHandle_t s_write_sink_h = NULL;  // The task in charge of writing to 
 static TaskHandle_t write_task, capture;
 
 // Camera handle
-static esp_cam_ctlr_handle_t s_cam = NULL;
+static esp_cam_ctlr_handle_t    s_cam = NULL;
+static esp_cam_sensor_device_t *s_cam_dev;
 
 // H.264 encoder handle and configuration
 static esp_h264_enc_handle_t s_enc   = NULL;
@@ -505,7 +506,8 @@ esp_err_t vman_init(void) {
       .port           = ESP_CAM_SENSOR_MIPI_CSI,
       .format_name    = "MIPI_2lane_24Minput_RAW10_1920x1080_30fps",
   };
-  example_sensor_init(&cam_sensor_config, &sensor_handle);
+  // example_sensor_init(&cam_sensor_config, &sensor_handle);
+  sensor_init(&cam_sensor_config, &s_cam_dev);
 
   // Configure and create the CSI controller
   esp_cam_ctlr_csi_config_t cfg = {

@@ -18,8 +18,8 @@
 
 static const char *TAG = "sensor_init";
 
-void example_sensor_init(example_sensor_config_t *sensor_config,
-                         example_sensor_handle_t *out_sensor_handle) {
+void sensor_init(example_sensor_config_t  *sensor_config,
+                 esp_cam_sensor_device_t **out_sensor_device) {
   esp_err_t ret = ESP_FAIL;
 
   //---------------I2C Init------------------//
@@ -87,11 +87,7 @@ void example_sensor_init(example_sensor_config_t *sensor_config,
   }
 
   ret = esp_cam_sensor_set_format(cam, (const esp_cam_sensor_format_t *)cam_cur_fmt);
-  if (ret != ESP_OK) {
-    ESP_LOGE(TAG, "Format set fail");
-  } else {
-    ESP_LOGI(TAG, "Format in use:%s", cam_cur_fmt->name);
-  }
+
   int enable_flag = 1;
   // Set sensor output stream
   ret = esp_cam_sensor_ioctl(cam, ESP_CAM_SENSOR_IOC_S_STREAM, &enable_flag);
@@ -99,8 +95,8 @@ void example_sensor_init(example_sensor_config_t *sensor_config,
     ESP_LOGE(TAG, "Start stream fail");
   }
   ESP_ERROR_CHECK(ret);
-  out_sensor_handle->i2c_bus_handle = i2c_bus_handle;
-  out_sensor_handle->sccb_handle    = cam_config.sccb_handle;
+
+  *out_sensor_device = cam;
 }
 
 void example_sensor_deinit(example_sensor_handle_t sensor_handle) {

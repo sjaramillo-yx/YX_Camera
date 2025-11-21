@@ -8,6 +8,7 @@
 
 #include "driver/i2c_master.h"
 #include "esp_cam_sensor.h"
+#include "hal/color_types.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -37,10 +38,10 @@ typedef struct {
  * @brief SCCB Interface and Sensor Init
  *
  * @param[in]  sensor_config         Camera sensor configuration
- * @param[out] out_sensor_handle     Camera sensor handle
+ * @param[out] out_sensor_device     Camera sensor handle
  */
-void example_sensor_init(example_sensor_config_t *sensor_config,
-                         example_sensor_handle_t *out_sensor_handle);
+void sensor_init(example_sensor_config_t  *sensor_config,
+                 esp_cam_sensor_device_t **out_sensor_device);
 
 /**
  * @brief SCCB Interface and Sensor Deinit
