@@ -379,28 +379,28 @@ static void write_to_sd_task(void *arg) {
 
     // Check if threshold has been crossed
     if (staging.active.staged >= STAGE_LIMIT) {
-      to_flush = staging.active.staged & ~(CONFIG_ALLOCATION_UNIT_SIZE - 1);
+      stage_t *flush_stage = &staging.active;
+      stage_t *next_stage  = &staging.inactive;
+      to_flush             = flush_stage->staged & ~(CONFIG_ALLOCATION_UNIT_SIZE - 1);
       ESP_LOGD(TAG, "[%s] Sending %lld bytes to sink", pcTaskGetName(NULL), to_flush);
-      uint64_t moved = staging.active.staged - to_flush;
+      uint64_t moved = flush_stage->staged - to_flush;
       // Copy remaining bytes to inactive stage
       /// TODO: Remove portMAX_DELAY and handle errors
-      xSemaphoreTake(staging.inactive.write_smphr, portMAX_DELAY);
-      ESP_ERROR_CHECK(esp_async_memcpy(driver, staging.inactive.data,
-                                       staging.active.data + to_flush, moved, my_async_memcpy_cb,
-                                       dma_semphr));
+      xSemaphoreTake(next_stage->write_smphr, portMAX_DELAY);
+      ESP_ERROR_CHECK(esp_async_memcpy(driver, next_stage->data, flush_stage->data + to_flush,
+                                       moved, my_async_memcpy_cb, dma_semphr));
       xSemaphoreTake(dma_semphr, portMAX_DELAY);  // Wait until the buffer copy is done
-      xSemaphoreGive(staging.inactive.write_smphr);
-      staging.active.staged = to_flush;
-      // Swap active and inactive stages
-      stage_t temp          = staging.active;
-      staging.active        = staging.inactive;
-      staging.active.staged = moved;
-      staging.inactive      = temp;
+      next_stage->staged  = moved;
+      flush_stage->staged = to_flush;
+      xSemaphoreGive(next_stage->write_smphr);
       // Send the stage to be written
       /// TODO: Remove portMAX_DELAY and handle errors
       /// NOTE: Since the inactive stage is always the one to write, the write_sink task could be
       /// notified instead of sending the stage through the queue.
-      xQueueSendToBack(s_filled_stage_q, &staging.inactive, portMAX_DELAY);
+      xQueueSendToBack(s_filled_stage_q, flush_stage, portMAX_DELAY);
+      // Swap active and inactive stages
+      staging.active   = *next_stage;
+      staging.inactive = *flush_stage;
     }
 
   done:
