@@ -424,11 +424,14 @@ fail:
 
 static void capture_encode_task(void *arg) {
   // Declare capture variables
-  uint32_t frame_idx         = 0;
-  uint8_t *frame             = NULL;
-  uint64_t now               = esp_timer_get_time();
-  uint64_t encoded           = 0;
-  int      frames_per_second = 0;
+  uint32_t                  frame_idx         = 0;
+  uint8_t                  *frame             = NULL;
+  esp_h264_enc_out_frame_t *out               = NULL;
+  esp_h264_enc_in_frame_t   in                = {0};
+  uint64_t                  now               = esp_timer_get_time();
+  uint64_t                  encoded           = 0;
+  int                       frames_per_second = 0;
+  esp_h264_err_t            enc_err           = ESP_OK;
 
   // Encoder parameter values (useful for debugging)
   esp_h264_enc_param_hw_handle_t param_hd;
@@ -439,6 +442,13 @@ static void capture_encode_task(void *arg) {
   while (1) {
     ESP_LOGD(TAG, "Taking enc_semphr in capture_encode_task");
     xSemaphoreTake(enc_semphr, portMAX_DELAY);
+    // Skip processing when recording is not active or the encoder/camera handles are not ready.
+    if (!recording || s_cam == NULL || s_enc == NULL) {
+      xSemaphoreGive(enc_semphr);
+      vTaskDelay(pdMS_TO_TICKS(10));
+      continue;
+    }
+
     // Receive a frame from the free frame queue
     ESP_LOGD(TAG, "Receiving frame from s_free_frame_q");
     xQueueReceive(s_free_frame_q, &frame, portMAX_DELAY);
@@ -447,25 +457,25 @@ static void capture_encode_task(void *arg) {
         .buflen = s_frame_bytes,
     };
     // Ask the camera sensor to fill the buffer
-    ESP_LOGD(TAG, "Receiving transaction from sensor");
+    ESP_LOGD(TAG, "[%s] Receiving %d bytes from sensor", pcTaskGetName(NULL), s_frame_bytes);
     ESP_ERROR_CHECK(esp_cam_ctlr_receive(s_cam, &trans, ESP_CAM_CTLR_MAX_DELAY));
 
     // Build input frame view for encoder from the received bytes
-    esp_h264_enc_in_frame_t in = {0};
-    in.pts                     = (frame_idx * 1000U) / s_fps;  // ms timebase is fine for raw stream
-    in.raw_data.buffer         = frame;
-    in.raw_data.len            = trans.received_size;
+    in.pts             = (frame_idx * 1000U) / s_fps;  // ms timebase is fine for raw stream
+    in.raw_data.buffer = frame;
+    in.raw_data.len    = s_frame_bytes;  // The driver doesn't fill trans.received_bytes
 
     // Encoded output container
-    esp_h264_enc_out_frame_t *out;
-    ESP_LOGD(TAG, "Receiving buffer from s_free_encoded_q");
-    xQueueReceive(s_free_encoded_q, &out, portMAX_DELAY);       // Get a free encoded buffer
-    esp_h264_err_t er = esp_h264_enc_process(s_enc, &in, out);  // Ask the encoder to fill it
-    xQueueSendToBack(s_free_frame_q, &frame, portMAX_DELAY);    // Return the used sensor buffer
+    ESP_LOGD(TAG, "[%s] Receiving buffer from s_free_encoded_q", pcTaskGetName(NULL));
+    xQueueReceive(s_free_encoded_q, &out, portMAX_DELAY);  // Get a free encoded buffer
+    enc_err = esp_h264_enc_process(s_enc, &in, out);       // Ask the encoder to fill it
+    ESP_LOGD(TAG, "[%s] Encoder processing done (%s)", pcTaskGetName(NULL),
+             esp_err_to_name(enc_err));
+    xQueueSendToBack(s_free_frame_q, &frame, portMAX_DELAY);  // Return the used sensor buffer
 
     // Check for encoder errors
-    if (er != ESP_H264_ERR_OK) {
-      ESP_LOGE(TAG, "[%s] H264 process failed (%d)", pcTaskGetName(NULL), (int)er);
+    if (enc_err != ESP_H264_ERR_OK) {
+      ESP_LOGE(TAG, "[%s] H264 process failed (%d)", pcTaskGetName(NULL), (int)enc_err);
       xQueueSendToBack(s_free_encoded_q, &out, portMAX_DELAY);
       /// TODO: Handle errors
     } else {
@@ -485,7 +495,7 @@ static void capture_encode_task(void *arg) {
       xQueueSendToBack(s_filled_encoded_q, &out, portMAX_DELAY);
     }
     frame_idx++;
-    ESP_LOGD(TAG, "Giving enc_semphr");
+    ESP_LOGD(TAG, "[%s] Giving enc_semphr", pcTaskGetName(NULL));
     xSemaphoreGive(enc_semphr);
   }
 }
@@ -549,7 +559,7 @@ static void vman_rec_handler(void *handler_arg, esp_event_base_t event_base, int
   ESP_LOGI(TAG, "Received event %s:%d", (char *)event_base, event_id);
   recording_conf_t *rec_params;
   esp_err_t         started = ESP_OK;
-  char              rec_filename[128];
+  char              rec_filename[132];
   char             *stop_id;
   switch (event_id) {
   case REC_BEGIN:
@@ -579,14 +589,15 @@ static void vman_rec_handler(void *handler_arg, esp_event_base_t event_base, int
 
     apply_encoder_runtime_config(rec_params);
     // Begin the recording
-    snprintf(rec_filename, sizeof(rec_filename) + 4, "%s.bin", rec_params->transaction_id);
+    snprintf(rec_filename, sizeof(rec_filename), "%s.bin", rec_params->transaction_id);
     started = vman_start_recording(rec_filename);
     if (started != ESP_OK) {
       /// TODO: Handle errors here
       break;
     }
     rec_conf = *rec_params;
-    strcpy(rec_file.transaction_id, rec_conf.transaction_id);
+    strncpy(rec_file.transaction_id, rec_conf.transaction_id, sizeof(rec_file.transaction_id) - 1);
+    rec_file.transaction_id[sizeof(rec_file.transaction_id) - 1] = '\0';
     esp_event_post_to(rec_event_h, RECORDING_EVENTS, REC_STARTED, (void *)&rec_conf,
                       sizeof(rec_conf), 100);
     break;
@@ -723,13 +734,18 @@ esp_err_t vman_stop_recording(void) {
   ESP_GOTO_ON_FALSE(recording, ESP_ERR_INVALID_STATE, fail, TAG,
                     "There's no recording in progress");
 
-  // Close the hardware encoder
+  // Delete the hardware encoder
   ESP_LOGD(TAG, "Taking enc_semphr in vman_stop_recording");
   xSemaphoreTake(enc_semphr, portMAX_DELAY);
-  esp_h264_enc_close(s_enc);
-  esp_h264_enc_del(s_enc);
+  recording = false;
+  if (s_enc) {
+    ESP_LOGD(TAG, "Deleting the H264 encoder");
+    esp_h264_enc_del(s_enc);  // Deleting the encoder closes it also
+    s_enc = NULL;
+  }
 
   // Stop the camera controller
+  ESP_LOGD(TAG, "Stopping the camera controller");
   ESP_GOTO_ON_ERROR(esp_cam_ctlr_stop(s_cam), cleanup, TAG, "Couldn't stop the camera controller");
   rec_file.recorded_seconds = (esp_timer_get_time() - rec_file.recorded_seconds) / 1000000UL;
 
