@@ -415,7 +415,7 @@ fail:
     fclose(fp);
   // Free staging buffers
   free(staging.active.data);
-  free(staging.active.data);
+  free(staging.inactive.data);
   // Delete tasks and return
   vTaskDelete(s_write_sink_h);
   vTaskDelete(NULL);
