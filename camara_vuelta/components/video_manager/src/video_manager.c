@@ -91,7 +91,8 @@ static size_t   s_frame_bytes = MAX_FRAME_BYTES;
 static size_t   s_enc_bytes   = DEFAULT_ENCODER_BYTES;
 static uint16_t s_hres        = DEFAULT_HRES;
 static uint16_t s_vres        = DEFAULT_VRES;
-static uint16_t s_fps         = DEFAULT_FPS;
+static uint16_t s_sensor_fps  = DEFAULT_FPS;
+static uint16_t s_output_fps  = DEFAULT_FPS;
 
 // Camera handle and configurations
 static esp_cam_sensor_device_t *s_cam_dev;
@@ -124,8 +125,8 @@ static esp_isp_processor_cfg_t isp_config = {
     .input_data_source      = ISP_INPUT_DATA_SOURCE_CSI,
     .input_data_color_type  = ISP_COLOR_RAW10,
     .output_data_color_type = ISP_COLOR_YUV420,
-    .has_line_start_packet  = false,
-    .has_line_end_packet    = false,
+    .has_line_start_packet  = true,
+    .has_line_end_packet    = true,
     .h_res                  = DEFAULT_HRES,
     .v_res                  = DEFAULT_VRES,
     .bayer_order            = COLOR_RAW_ELEMENT_ORDER_GBRG,
@@ -183,7 +184,8 @@ static bool IRAM_ATTR on_trans_finished(esp_cam_ctlr_handle_t h, esp_cam_ctlr_tr
 static esp_cam_ctlr_evt_cbs_t cbs = {.on_trans_finished = on_trans_finished};
 
 /*================== Statics ==================*/
-static esp_err_t update_active_format(uint16_t hres, uint16_t vres, uint16_t fps) {
+static esp_err_t update_active_format(uint16_t hres, uint16_t vres, uint16_t sensor_fps,
+                                      uint16_t output_fps) {
   // Check that the required frame bytes fit in the buffers
   size_t required_frame_bytes =
       ALIGN_UP((size_t)((size_t)hres * vres * BYTES_PER_PIXEL_YUV420), 64);
@@ -201,21 +203,22 @@ static esp_err_t update_active_format(uint16_t hres, uint16_t vres, uint16_t fps
   // Save the configurations to static variables
   s_hres        = hres;
   s_vres        = vres;
-  s_fps         = fps;
+  s_sensor_fps  = sensor_fps;
+  s_output_fps  = output_fps;
   s_frame_bytes = required_frame_bytes;
 
   // Configure the encoder
   enc_cfg.res.width  = hres;
   enc_cfg.res.height = vres;
-  enc_cfg.fps        = fps;
-  enc_cfg.gop        = fps;
+  enc_cfg.fps        = output_fps;
+  enc_cfg.gop        = output_fps;
 
   return ESP_OK;
 }
 
 static esp_err_t vman_configure_resolution(uint16_t hres, uint16_t vres, uint16_t fps) {
   esp_err_t ret        = ESP_OK;
-  uint16_t  active_fps = fps;
+  uint16_t  sensor_fps = 0;  // Use the sensor's native FPS for the selected format
 
   ESP_GOTO_ON_FALSE(!recording, ESP_ERR_INVALID_STATE, fail, TAG,
                     "Cannot change resolution while recording");
@@ -242,9 +245,19 @@ static esp_err_t vman_configure_resolution(uint16_t hres, uint16_t vres, uint16_
   }
 
   // Attempt to set the sensor format
-  ESP_GOTO_ON_ERROR(set_sensor_format(hres, vres, &active_fps, s_cam_dev), fail, TAG,
+  ESP_GOTO_ON_ERROR(set_sensor_format(hres, vres, &sensor_fps, s_cam_dev), fail, TAG,
                     "Failed to configure sensor format");
-  ESP_GOTO_ON_ERROR(update_active_format(hres, vres, active_fps), fail, TAG,
+  uint16_t output_fps = fps ? fps : sensor_fps;
+  if (output_fps == 0) {
+    output_fps = sensor_fps ? sensor_fps : DEFAULT_FPS;
+    ESP_LOGW(TAG, "Output FPS was zero, defaulting to %u", output_fps);
+  }
+  if (output_fps > sensor_fps && sensor_fps > 0) {
+    ESP_LOGW(TAG, "Requested FPS %u exceeds sensor format FPS %u, limiting output to sensor rate",
+             output_fps, sensor_fps);
+    output_fps = sensor_fps;
+  }
+  ESP_GOTO_ON_ERROR(update_active_format(hres, vres, sensor_fps, output_fps), fail, TAG,
                     "Requested video format is not supported by current buffers");
 
   // Configure and create a new CSI controller
@@ -266,7 +279,8 @@ static esp_err_t vman_configure_resolution(uint16_t hres, uint16_t vres, uint16_
   ESP_GOTO_ON_ERROR(esp_cam_ctlr_enable(s_cam), fail, TAG, "Couldn't enable the camera controller");
 
   // Log the new configuration
-  ESP_LOGI(TAG, "Configured video pipeline for %ux%u @ %u fps", hres, vres, active_fps);
+  ESP_LOGI(TAG, "Configured video pipeline for %ux%u @ %u fps (sensor), output fps %u", hres, vres,
+           sensor_fps, output_fps);
   // Re-enable the sensor stream
   stream_flag = 1;
   ESP_GOTO_ON_ERROR(esp_cam_sensor_ioctl(s_cam_dev, ESP_CAM_SENSOR_IOC_S_STREAM, &stream_flag),
@@ -278,13 +292,13 @@ fail:
 }
 
 static void apply_encoder_runtime_config(const recording_conf_t *rec_params) {
-  uint16_t target_fps = rec_params->fps ? rec_params->fps : s_fps;
-
   // If the recording parameters include target bitrate, use it. If not, calculate a new one
   enc_cfg.rc.bitrate =
       rec_params->target_bitrate
           ? rec_params->target_bitrate
-          : rec_params->hres * rec_params->vres * BYTES_PER_PIXEL_YUV420 * 8 * target_fps / 100;
+          : rec_params->hres * rec_params->vres * BYTES_PER_PIXEL_YUV420 * 8 * s_output_fps / 100;
+  enc_cfg.fps       = s_output_fps;
+  enc_cfg.gop       = s_output_fps;
   enc_cfg.rc.qp_max = rec_params->qp_max;
   enc_cfg.rc.qp_min = rec_params->qp_min;
 }
@@ -433,15 +447,17 @@ fail:
 
 static void capture_encode_task(void *arg) {
   // Declare capture variables
-  uint32_t                  frame_idx         = 0;
+  uint64_t                  frame_idx         = 0;
   uint8_t                  *frame             = NULL;
   esp_h264_enc_out_frame_t *out               = NULL;
   esp_h264_enc_in_frame_t   in                = {0};
   uint64_t                  now               = esp_timer_get_time();
   uint64_t                  encoded           = 0;
   int                       frames_per_second = 0;
-  esp_h264_err_t            enc_err           = ESP_OK;
+  uint64_t                  next_encode_time  = 0;
+  uint16_t                  last_output_fps   = s_output_fps;
 
+  esp_h264_err_t enc_err = ESP_OK;
   // Encoder parameter values (useful for debugging)
   esp_h264_enc_param_hw_handle_t param_hd;
   uint32_t                       set_bitrate = 0;
@@ -468,8 +484,26 @@ static void capture_encode_task(void *arg) {
     // Ask the camera sensor to fill the buffer
     ESP_LOGD(TAG, "[%s] Receiving %d bytes from sensor", pcTaskGetName(NULL), s_frame_bytes);
     ESP_ERROR_CHECK(esp_cam_ctlr_receive(s_cam, &trans, ESP_CAM_CTLR_MAX_DELAY));
+
+    const uint16_t current_output_fps = s_output_fps ? s_output_fps : DEFAULT_FPS;
+    if (current_output_fps != last_output_fps) {
+      // Reset pacing when the requested output rate changes
+      last_output_fps  = current_output_fps;
+      next_encode_time = 0;
+    }
+    const uint64_t frame_interval_us = current_output_fps ? (1000000ULL / current_output_fps) : 0;
+
+    // Decide whether to encode this frame based on the target output FPS
+    const uint64_t capture_time = esp_timer_get_time();
+    if (frame_interval_us > 0 && capture_time < next_encode_time) {
+      ESP_LOGD(TAG, "Dropping frame to match target FPS (%u)", current_output_fps);
+      xQueueSendToBack(s_free_frame_q, &frame, portMAX_DELAY);
+      xSemaphoreGive(enc_semphr);
+      continue;
+    }
+
     // Build input frame view for encoder from the received bytes
-    in.pts             = (frame_idx * 1000U) / s_fps;  // ms timebase is fine for raw stream
+    in.pts = (frame_idx * 1000U) / current_output_fps;  // ms timebase is fine for raw stream
     in.raw_data.buffer = frame;
     in.raw_data.len    = s_frame_bytes;  // The driver doesn't fill trans.received_bytes
 
@@ -481,6 +515,11 @@ static void capture_encode_task(void *arg) {
     ESP_LOGD(TAG, "[%s] Encoder processing done (%s)", pcTaskGetName(NULL),
              esp_err_to_name(enc_err));
     xQueueSendToBack(s_free_frame_q, &frame, portMAX_DELAY);  // Return the used sensor buffer
+
+    // Advance the next encode time if we are pacing
+    if (frame_interval_us > 0) {
+      next_encode_time = capture_time + frame_interval_us;
+    }
 
     // Check for encoder errors
     if (enc_err != ESP_H264_ERR_OK) {
@@ -604,7 +643,10 @@ static void vman_rec_handler(void *handler_arg, esp_event_base_t event_base, int
       /// TODO: Handle errors here
       break;
     }
-    rec_conf = *rec_params;
+    // Use the true configured parameters
+    rec_params->fps            = s_output_fps;
+    rec_params->target_bitrate = enc_cfg.rc.bitrate;
+    rec_conf                   = *rec_params;
     strncpy(rec_file.transaction_id, rec_conf.transaction_id, sizeof(rec_file.transaction_id) - 1);
     rec_file.transaction_id[sizeof(rec_file.transaction_id) - 1] = '\0';
     esp_event_post_to(rec_event_h, RECORDING_EVENTS, REC_STARTED, (void *)&rec_conf,
@@ -670,7 +712,7 @@ esp_err_t vman_init(void) {
   sensor_init(&cam_sensor_config, &s_cam_dev);
 
   // Configure the pipeline
-  ESP_ERROR_CHECK(vman_configure_resolution(s_hres, s_vres, s_fps));
+  ESP_ERROR_CHECK(vman_configure_resolution(s_hres, s_vres, s_output_fps));
 
   //---------------FreeRTOS Tasks------------------//
   xTaskCreatePinnedToCore(write_to_sd_task, "vman.write.loop", 4096, NULL, 8, &write_task, 0);
