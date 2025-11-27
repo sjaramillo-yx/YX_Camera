@@ -27,9 +27,9 @@ typedef struct {
 #define CSI_LANES               2
 #define CSI_LANE_BITRATE_MBPS   450  // requested per-lane bitrate
 #define CSI_INPUT_COLOR         CAM_CTLR_COLOR_RAW10
-#define CSI_OUTPUT_COLOR        CAM_CTLR_COLOR_YUV420  // encoder expects YUV or I420
-#define BYTES_PER_PIXEL_YUV420  1.5                    // YUYV
-#define DEFAULT_BYTES_PER_FRAME 3110400                // 1920 * 1080 * 1.5
+#define CSI_OUTPUT_COLOR        CAM_CTLR_COLOR_YUV420
+#define BYTES_PER_PIXEL_YUV420  1.5      // YUY420
+#define DEFAULT_BYTES_PER_FRAME 3110400  // 1920 * 1080 * 1.5
 #define DEFAULT_ENCODER_BYTES   (DEFAULT_HRES * DEFAULT_VRES * 2)
 
 // H.264 configuration
@@ -183,15 +183,6 @@ static bool IRAM_ATTR on_trans_finished(esp_cam_ctlr_handle_t h, esp_cam_ctlr_tr
 static esp_cam_ctlr_evt_cbs_t cbs = {.on_trans_finished = on_trans_finished};
 
 /*================== Statics ==================*/
-// Helper function to allocate aligned memory with error checking
-static void *allocate_frame_buffer(size_t size, uint32_t *actual_size, const char *buffer_name) {
-  void *buffer = esp_h264_aligned_calloc(16, 1, size, actual_size, ESP_H264_MEM_SPIRAM);
-  if (!buffer) {
-    ESP_LOGE(TAG, "Failed to allocate %s buffer memory (%zu bytes)", buffer_name, size);
-  }
-  return buffer;
-}
-
 static esp_err_t update_active_format(uint16_t hres, uint16_t vres, uint16_t fps) {
   // Check that the required frame bytes fit in the buffers
   size_t required_frame_bytes =
@@ -432,8 +423,8 @@ fail:
   if (fp)
     fclose(fp);
   // Free staging buffers
-  free(staging.active.data);
-  free(staging.inactive.data);
+  heap_caps_free(staging.active.data);
+  heap_caps_free(staging.inactive.data);
   // Delete tasks and return
   vTaskDelete(s_write_sink_h);
   vTaskDelete(NULL);
