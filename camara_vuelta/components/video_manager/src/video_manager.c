@@ -308,9 +308,12 @@ static void write_sink(void *p) {
     if (xQueueReceive(s_filled_stage_q, &stage, portMAX_DELAY) != pdTRUE || fp == NULL) {
       continue;
     }
-    ESP_LOGV(TAG, "[%s] Writing buffer at %p", pcTaskGetName(NULL), stage.data);
+    ESP_LOGD(TAG, "[%s] Writing buffer at %p", pcTaskGetName(NULL), stage.data);
     /// TODO: Remove portMAX_DELAY and handle errors
+    ESP_LOGD(TAG, "[%s] Taking stage writing semaphore (%p)", pcTaskGetName(NULL),
+             stage.write_smphr);
     xSemaphoreTake(stage.write_smphr, portMAX_DELAY);
+    ESP_LOGD(TAG, "[%s] Got stage writing semaphore (%p)", pcTaskGetName(NULL), stage.write_smphr);
     now   = esp_timer_get_time();
     wrote = fwrite(stage.data, 1, stage.staged, fp);
     if (wrote != stage.staged) {
@@ -322,12 +325,15 @@ static void write_sink(void *p) {
                (float)time / 1000000.0, (((long long int)wrote * 1000000LL) / time) >> 10);
     }
     stage.staged = 0;
+    ESP_LOGD(TAG, "[%s] Giving stage writing semaphore (%p)", pcTaskGetName(NULL),
+             stage.write_smphr);
     xSemaphoreGive(stage.write_smphr);
+    ESP_LOGD(TAG, "[%s] Done", pcTaskGetName(NULL));
   }
 }
 
 static void write_to_sd_task(void *arg) {
-  // Create the write sink and pass the file pointer as context
+  // Create the write sink
   xTaskCreate(write_sink, "vman.write.sink", 4096, NULL, 15, &s_write_sink_h);
 
   // Create the staging buffers
@@ -374,34 +380,46 @@ static void write_to_sd_task(void *arg) {
                                      curr_frame->raw_data.buffer, curr_frame->length,
                                      my_async_memcpy_cb, dma_semphr));
     xSemaphoreTake(dma_semphr, portMAX_DELAY);  // Wait until the buffer copy is done
-    xSemaphoreGive(staging.active.write_smphr);
     staging.active.staged += curr_frame->length;
 
     // Check if threshold has been crossed
     if (staging.active.staged >= STAGE_LIMIT) {
-      stage_t *flush_stage = &staging.active;
-      stage_t *next_stage  = &staging.inactive;
-      to_flush             = flush_stage->staged & ~(CONFIG_ALLOCATION_UNIT_SIZE - 1);
+      to_flush = staging.active.staged & ~(CONFIG_ALLOCATION_UNIT_SIZE - 1);
       ESP_LOGD(TAG, "[%s] Sending %lld bytes to sink", pcTaskGetName(NULL), to_flush);
-      uint64_t moved = flush_stage->staged - to_flush;
+      uint64_t moved = staging.active.staged - to_flush;
       // Copy remaining bytes to inactive stage
       /// TODO: Remove portMAX_DELAY and handle errors
-      xSemaphoreTake(next_stage->write_smphr, portMAX_DELAY);
-      ESP_ERROR_CHECK(esp_async_memcpy(driver, next_stage->data, flush_stage->data + to_flush,
-                                       moved, my_async_memcpy_cb, dma_semphr));
+      ESP_LOGD(TAG, "[%s] Taking inactive stage writing semaphore (%p)", pcTaskGetName(NULL),
+               staging.inactive.write_smphr);
+      xSemaphoreTake(staging.inactive.write_smphr, portMAX_DELAY);
+      ESP_LOGD(TAG, "[%s] Got inactive stage writing semaphore (%p)", pcTaskGetName(NULL),
+               staging.inactive.write_smphr);
+      ESP_LOGD(TAG, "[%s] Starting DMA copy", pcTaskGetName(NULL));
+      ESP_ERROR_CHECK(esp_async_memcpy(driver, staging.inactive.data,
+                                       staging.active.data + to_flush, moved, my_async_memcpy_cb,
+                                       dma_semphr));
       xSemaphoreTake(dma_semphr, portMAX_DELAY);  // Wait until the buffer copy is done
-      next_stage->staged  = moved;
-      flush_stage->staged = to_flush;
-      xSemaphoreGive(next_stage->write_smphr);
+      ESP_LOGD(TAG, "[%s] DMA copy done", pcTaskGetName(NULL));
+      staging.inactive.staged = moved;
+      staging.active.staged   = to_flush;
+      ESP_LOGD(TAG, "[%s] Giving inactive stage writing semaphore (%p)", pcTaskGetName(NULL),
+               staging.inactive.write_smphr);
+      xSemaphoreGive(staging.inactive.write_smphr);
       // Send the stage to be written
       /// TODO: Remove portMAX_DELAY and handle errors
       /// NOTE: Since the inactive stage is always the one to write, the write_sink task could be
       /// notified instead of sending the stage through the queue.
-      xQueueSendToBack(s_filled_stage_q, flush_stage, portMAX_DELAY);
+      ESP_LOGD(TAG, "[%s] Giving flushed stage writing semaphore (%p)", pcTaskGetName(NULL),
+               staging.active.write_smphr);
+      xSemaphoreGive(staging.active.write_smphr);
+      xQueueSendToBack(s_filled_stage_q, &staging.active, portMAX_DELAY);
       // Swap active and inactive stages
-      staging.active   = *next_stage;
-      staging.inactive = *flush_stage;
+      ESP_LOGD(TAG, "[%s] Swapping active stage", pcTaskGetName(NULL));
+      stage_t tmp      = staging.active;
+      staging.active   = staging.inactive;
+      staging.inactive = tmp;
     }
+    xSemaphoreGive(staging.active.write_smphr);
 
   done:
     xQueueSendToBack(s_free_encoded_q, &curr_frame, portMAX_DELAY);
