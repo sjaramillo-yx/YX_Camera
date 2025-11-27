@@ -301,10 +301,10 @@ static void write_sink(void *p) {
     }
     ESP_LOGD(TAG, "[%s] Writing buffer at %p", pcTaskGetName(NULL), stage.data);
     /// TODO: Remove portMAX_DELAY and handle errors
-    ESP_LOGD(TAG, "[%s] Taking stage writing semaphore (%p)", pcTaskGetName(NULL),
+    ESP_LOGV(TAG, "[%s] Taking stage writing semaphore (%p)", pcTaskGetName(NULL),
              stage.write_smphr);
     xSemaphoreTake(stage.write_smphr, portMAX_DELAY);
-    ESP_LOGD(TAG, "[%s] Got stage writing semaphore (%p)", pcTaskGetName(NULL), stage.write_smphr);
+    ESP_LOGV(TAG, "[%s] Got stage writing semaphore (%p)", pcTaskGetName(NULL), stage.write_smphr);
     now   = esp_timer_get_time();
     wrote = fwrite(stage.data, 1, stage.staged, fp);
     if (wrote != stage.staged) {
@@ -316,10 +316,10 @@ static void write_sink(void *p) {
                (float)time / 1000000.0, (((long long int)wrote * 1000000LL) / time) >> 10);
     }
     stage.staged = 0;
-    ESP_LOGD(TAG, "[%s] Giving stage writing semaphore (%p)", pcTaskGetName(NULL),
+    ESP_LOGV(TAG, "[%s] Giving stage writing semaphore (%p)", pcTaskGetName(NULL),
              stage.write_smphr);
     xSemaphoreGive(stage.write_smphr);
-    ESP_LOGD(TAG, "[%s] Done", pcTaskGetName(NULL));
+    ESP_LOGV(TAG, "[%s] Done", pcTaskGetName(NULL));
   }
 }
 
@@ -380,27 +380,27 @@ static void write_to_sd_task(void *arg) {
       uint64_t moved = staging.active.staged - to_flush;
       // Copy remaining bytes to inactive stage
       /// TODO: Remove portMAX_DELAY and handle errors
-      ESP_LOGD(TAG, "[%s] Taking inactive stage writing semaphore (%p)", pcTaskGetName(NULL),
+      ESP_LOGV(TAG, "[%s] Taking inactive stage writing semaphore (%p)", pcTaskGetName(NULL),
                staging.inactive.write_smphr);
       xSemaphoreTake(staging.inactive.write_smphr, portMAX_DELAY);
-      ESP_LOGD(TAG, "[%s] Got inactive stage writing semaphore (%p)", pcTaskGetName(NULL),
+      ESP_LOGV(TAG, "[%s] Got inactive stage writing semaphore (%p)", pcTaskGetName(NULL),
                staging.inactive.write_smphr);
-      ESP_LOGD(TAG, "[%s] Starting DMA copy", pcTaskGetName(NULL));
+      ESP_LOGV(TAG, "[%s] Starting DMA copy", pcTaskGetName(NULL));
       ESP_ERROR_CHECK(esp_async_memcpy(driver, staging.inactive.data,
                                        staging.active.data + to_flush, moved, my_async_memcpy_cb,
                                        dma_semphr));
       xSemaphoreTake(dma_semphr, portMAX_DELAY);  // Wait until the buffer copy is done
-      ESP_LOGD(TAG, "[%s] DMA copy done", pcTaskGetName(NULL));
+      ESP_LOGV(TAG, "[%s] DMA copy done", pcTaskGetName(NULL));
       staging.inactive.staged = moved;
       staging.active.staged   = to_flush;
-      ESP_LOGD(TAG, "[%s] Giving inactive stage writing semaphore (%p)", pcTaskGetName(NULL),
+      ESP_LOGV(TAG, "[%s] Giving inactive stage writing semaphore (%p)", pcTaskGetName(NULL),
                staging.inactive.write_smphr);
       xSemaphoreGive(staging.inactive.write_smphr);
       // Send the stage to be written
       /// TODO: Remove portMAX_DELAY and handle errors
       /// NOTE: Since the inactive stage is always the one to write, the write_sink task could be
       /// notified instead of sending the stage through the queue.
-      ESP_LOGD(TAG, "[%s] Giving flushed stage writing semaphore (%p)", pcTaskGetName(NULL),
+      ESP_LOGV(TAG, "[%s] Giving flushed stage writing semaphore (%p)", pcTaskGetName(NULL),
                staging.active.write_smphr);
       xSemaphoreGive(staging.active.write_smphr);
       xQueueSendToBack(s_filled_stage_q, &staging.active, portMAX_DELAY);
@@ -449,7 +449,7 @@ static void capture_encode_task(void *arg) {
 
   // Enter the main capture loop
   while (1) {
-    ESP_LOGD(TAG, "Taking enc_semphr in capture_encode_task");
+    ESP_LOGV(TAG, "Taking enc_semphr in capture_encode_task");
     xSemaphoreTake(enc_semphr, portMAX_DELAY);
     // Skip processing when recording is not active or the encoder/camera handles are not ready.
     if (!recording || s_cam == NULL || s_enc == NULL) {
@@ -468,7 +468,6 @@ static void capture_encode_task(void *arg) {
     // Ask the camera sensor to fill the buffer
     ESP_LOGD(TAG, "[%s] Receiving %d bytes from sensor", pcTaskGetName(NULL), s_frame_bytes);
     ESP_ERROR_CHECK(esp_cam_ctlr_receive(s_cam, &trans, ESP_CAM_CTLR_MAX_DELAY));
-
     // Build input frame view for encoder from the received bytes
     in.pts             = (frame_idx * 1000U) / s_fps;  // ms timebase is fine for raw stream
     in.raw_data.buffer = frame;
@@ -477,7 +476,8 @@ static void capture_encode_task(void *arg) {
     // Encoded output container
     ESP_LOGD(TAG, "[%s] Receiving buffer from s_free_encoded_q", pcTaskGetName(NULL));
     xQueueReceive(s_free_encoded_q, &out, portMAX_DELAY);  // Get a free encoded buffer
-    enc_err = esp_h264_enc_process(s_enc, &in, out);       // Ask the encoder to fill it
+    ESP_LOGV(TAG, "[%s] Got buffer at %p from s_free_encoded_q", pcTaskGetName(NULL), out);
+    enc_err = esp_h264_enc_process(s_enc, &in, out);  // Ask the encoder to fill it
     ESP_LOGD(TAG, "[%s] Encoder processing done (%s)", pcTaskGetName(NULL),
              esp_err_to_name(enc_err));
     xQueueSendToBack(s_free_frame_q, &frame, portMAX_DELAY);  // Return the used sensor buffer
@@ -521,18 +521,19 @@ static void allocate_pools(void) {
       ESP_LOGE(TAG, "Failed to alloc frame buffer %d (%u bytes)", i, (unsigned)MAX_FRAME_BYTES);
       abort();
     }
+    ESP_LOGV(TAG, "Allocated s_frame_bufs[%d] at %p", i, s_frame_bufs[i]);
   }
 
   // Allocate encoded buffers
-  uint32_t actual_size;
   uint32_t out_alignment = 0;
   esp_cache_get_alignment(MALLOC_CAP_SPIRAM, (size_t *)&out_alignment);
-  size_t frame_len = MAX_ENC_BYTES;
+  size_t actual_size = ALIGN_UP(MAX_ENC_BYTES, out_alignment);
   for (int i = 0; i < ENC_BUF_COUNT; ++i) {
-    s_enc_bufs[i].raw_data.buffer = allocate_frame_buffer(frame_len, &actual_size, "encoded frame");
-    s_enc_bufs[i].raw_data.len    = actual_size;
+    s_enc_bufs[i].raw_data.buffer = (uint8_t *)heap_caps_aligned_alloc(
+        64, actual_size, MALLOC_CAP_DMA | MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    s_enc_bufs[i].raw_data.len = actual_size;
     if (!s_enc_bufs[i].raw_data.buffer) {
-      ESP_LOGE(TAG, "Failed to alloc enc buffer %d (%u bytes)", i, (unsigned)frame_len);
+      ESP_LOGE(TAG, "Failed to alloc enc buffer %d (%u bytes)", i, (unsigned)actual_size);
       abort();
     }
   }
@@ -595,7 +596,6 @@ static void vman_rec_handler(void *handler_arg, esp_event_base_t event_base, int
                         sizeof(rec_error), 100);
       break;
     }
-
     apply_encoder_runtime_config(rec_params);
     // Begin the recording
     snprintf(rec_filename, sizeof(rec_filename), "%s.bin", rec_params->transaction_id);
@@ -743,20 +743,22 @@ esp_err_t vman_stop_recording(void) {
   ESP_GOTO_ON_FALSE(recording, ESP_ERR_INVALID_STATE, fail, TAG,
                     "There's no recording in progress");
 
-  // Delete the hardware encoder
+  // Prevent new frames from being processed
+  recording = false;
   ESP_LOGD(TAG, "Taking enc_semphr in vman_stop_recording");
   xSemaphoreTake(enc_semphr, portMAX_DELAY);
-  recording = false;
-  if (s_enc) {
-    ESP_LOGD(TAG, "Deleting the H264 encoder");
-    esp_h264_enc_del(s_enc);  // Deleting the encoder closes it also
-    s_enc = NULL;
-  }
 
   // Stop the camera controller
   ESP_LOGD(TAG, "Stopping the camera controller");
   ESP_GOTO_ON_ERROR(esp_cam_ctlr_stop(s_cam), cleanup, TAG, "Couldn't stop the camera controller");
   rec_file.recorded_seconds = (esp_timer_get_time() - rec_file.recorded_seconds) / 1000000UL;
+
+  // Close and delete the hardware encoder
+  if (s_enc) {
+    ESP_LOGD(TAG, "Deleting the H264 encoder");
+    esp_h264_enc_del(s_enc);
+    s_enc = NULL;
+  }
 
   // Wait for stages to be written by taking their write semaphores
   xSemaphoreTake(staging.inactive.write_smphr, portMAX_DELAY);
@@ -793,7 +795,6 @@ esp_err_t vman_stop_recording(void) {
   // Done
   ESP_LOGI(TAG, "Recording stopped");
   xSemaphoreGive(enc_semphr);
-  recording = false;
 
   // Report resulting statistics
   ESP_LOGI(TAG, "Filesize: %lld bytes", rec_file.size);
