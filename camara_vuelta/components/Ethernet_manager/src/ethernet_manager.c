@@ -116,6 +116,11 @@ esp_err_t ethman_init(esp_eth_handle_t *eth_handle_out) {
   *eth_handle_out = eth_handle;
   ESP_LOGI(TAG, "Waiting for IP address");
   xSemaphoreTake(ip_semphr, portMAX_DELAY);
+  /// TODO: Kconfig option for timeout
+  ESP_LOGI(TAG, "Waiting for SNTP synchronization");
+  if (esp_netif_sntp_sync_wait(pdMS_TO_TICKS(10000)) != ESP_OK) {
+    ESP_LOGW(TAG, "Failed to update system time within 10s timeout");
+  }
   return ret;
 
 err:
