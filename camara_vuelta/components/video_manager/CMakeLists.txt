@@ -11,7 +11,7 @@ set(
     esp_driver_cam
     esp_driver_isp
     esp_timer
-    Recording_events
+    recording_events
     SD_manager
 )
 
