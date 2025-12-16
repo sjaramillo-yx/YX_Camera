@@ -217,14 +217,22 @@ static void mqttworker_rec_handler(void *handler_arg, esp_event_base_t event_bas
     vman_rec_error = (recording_error_t *)event_data;
     ESP_LOGI(TAG, "Module %s reported error 0x%02x (%s)", vman_rec_error->errored_module,
              vman_rec_error->error_code, vman_rec_error->error_message);
+    struct timeval system_time;
+    gettimeofday(&system_time, NULL);
     cJSON_AddStringToObject(payload, "status", "ERROR");
     cJSON_AddStringToObject(payload, "thingName", mqtt_cert_data.thing_name);
     cJSON_AddStringToObject(payload, "errorCode", esp_err_to_name(vman_rec_error->error_code));
     cJSON_AddStringToObject(payload, "errorMessage", vman_rec_error->error_message);
     cJSON_AddStringToObject(payload, "errorOrigin", vman_rec_error->errored_module);
-    /// TODO: Publish to recording status topic instead of global error topic
+    cJSON_AddNumberToObject(payload, "timestamp", (uint64_t)system_time.tv_sec);
     payload_str = cJSON_Print(payload);
-    msg_id      = esp_mqtt_client_publish(client, "yx/cameras/errors", payload_str, 0, 1, 0);
+    if (strcmp(vman_rec_error->transaction_id, "")) {
+      snprintf(topic_name, 1024, "yx/recordings/%s/%s/status", mqtt_cert_data.thing_name,
+               vman_rec_error->transaction_id);
+    } else {
+      strncpy(topic_name, "yx/cameras/error", sizeof(topic_name));
+    }
+    msg_id = esp_mqtt_client_publish(client, topic_name, payload_str, 0, 1, 0);
     cJSON_free(payload_str);
     ESP_LOGD(TAG, "sent publish successful, msg_id=%d", msg_id);
     break;

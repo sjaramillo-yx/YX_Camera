@@ -30,10 +30,10 @@ ESP_EVENT_DECLARE_BASE(RECORDING_EVENTS);
  * @brief All the possible recording events
  */
 typedef enum {
-  REC_BEGIN,
-  REC_STARTED,
-  REC_STOP,
-  REC_DONE,
+  REC_BEGIN,    // Begin a new recording
+  REC_STARTED,  // Recording has started
+  REC_STOP,     // Stop ongoing recording
+  REC_DONE,     // Recording has successfully stopped
   REC_ERROR,
 } recording_event_t;
 
@@ -70,6 +70,7 @@ typedef struct {
   esp_err_t error_code;           // ESP IDF error code
   char      error_message[256];   // Message related to this error
   char      errored_module[128];  // Where this error was originated
+  char      transaction_id[128];  // The recording that failed
 } recording_error_t;
 
 /**

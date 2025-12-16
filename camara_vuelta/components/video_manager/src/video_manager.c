@@ -627,6 +627,8 @@ static void vman_rec_handler(void *handler_arg, esp_event_base_t event_base, int
         vman_configure_resolution(rec_params->hres, rec_params->vres, rec_params->fps);
     if (cfg_err != ESP_OK) {
       rec_error.error_code = cfg_err;
+      strncpy(rec_error.transaction_id, rec_params->transaction_id,
+              sizeof(rec_error.transaction_id));
       snprintf(rec_error.error_message, sizeof(rec_error.error_message),
                "Failed to configure resolution to %ux%u (%s)", rec_params->hres, rec_params->vres,
                esp_err_to_name(cfg_err));
@@ -659,6 +661,7 @@ static void vman_rec_handler(void *handler_arg, esp_event_base_t event_base, int
       ESP_LOGW(TAG, "Received stop signal for transaction ID %s but current recording has ID %s",
                stop_id, rec_conf.transaction_id);
       rec_error.error_code = ESP_ERR_INVALID_ARG;
+      strncpy(rec_error.transaction_id, rec_conf.transaction_id, sizeof(rec_error.transaction_id));
       snprintf(rec_error.error_message, sizeof(rec_error.error_message),
                "Mismatched transaction ID: current=%s, received=%s", rec_conf.transaction_id,
                stop_id);
@@ -672,9 +675,10 @@ static void vman_rec_handler(void *handler_arg, esp_event_base_t event_base, int
                         sizeof(rec_file), 100);
     } else {
       ESP_LOGE(TAG, "Couldn't stop recording (%s)", esp_err_to_name(rec_error.error_code));
+      strncpy(rec_error.transaction_id, rec_conf.transaction_id, sizeof(rec_error.transaction_id));
       snprintf(rec_error.error_message, sizeof(rec_error.error_message),
                "Couldn't stop recording with ID %s", stop_id);
-      snprintf(rec_error.errored_module, sizeof(rec_error.errored_module), TAG);
+      strncpy(rec_error.errored_module, TAG, sizeof(rec_error.errored_module));
       esp_event_post_to(rec_event_h, RECORDING_EVENTS, REC_ERROR, (void *)&rec_error,
                         sizeof(rec_error), 100);
       break;
