@@ -1,8 +1,3 @@
-/*
- * SPDX-FileCopyrightText: 2024-2025 Espressif Systems (Shanghai) CO LTD
- *
- * SPDX-License-Identifier: Apache-2.0
- */
 #include "sensor_init.h"
 #include "driver/i2c_master.h"
 #include "esp_attr.h"
@@ -18,8 +13,8 @@
 
 static const char *TAG = "sensor_init";
 
-void example_sensor_init(example_sensor_config_t *sensor_config,
-                         example_sensor_handle_t *out_sensor_handle) {
+void sensor_init(example_sensor_config_t  *sensor_config,
+                 esp_cam_sensor_device_t **out_sensor_device) {
   esp_err_t ret = ESP_FAIL;
 
   //---------------I2C Init------------------//
@@ -87,11 +82,7 @@ void example_sensor_init(example_sensor_config_t *sensor_config,
   }
 
   ret = esp_cam_sensor_set_format(cam, (const esp_cam_sensor_format_t *)cam_cur_fmt);
-  if (ret != ESP_OK) {
-    ESP_LOGE(TAG, "Format set fail");
-  } else {
-    ESP_LOGI(TAG, "Format in use:%s", cam_cur_fmt->name);
-  }
+
   int enable_flag = 1;
   // Set sensor output stream
   ret = esp_cam_sensor_ioctl(cam, ESP_CAM_SENSOR_IOC_S_STREAM, &enable_flag);
@@ -99,11 +90,50 @@ void example_sensor_init(example_sensor_config_t *sensor_config,
     ESP_LOGE(TAG, "Start stream fail");
   }
   ESP_ERROR_CHECK(ret);
-  out_sensor_handle->i2c_bus_handle = i2c_bus_handle;
-  out_sensor_handle->sccb_handle    = cam_config.sccb_handle;
+
+  *out_sensor_device = cam;
 }
 
 void example_sensor_deinit(example_sensor_handle_t sensor_handle) {
   ESP_ERROR_CHECK(esp_sccb_del_i2c_io(sensor_handle.sccb_handle));
   ESP_ERROR_CHECK(i2c_del_master_bus(sensor_handle.i2c_bus_handle));
+}
+
+esp_err_t set_sensor_format(uint16_t hres, uint16_t vres, uint16_t *fps,
+                            esp_cam_sensor_device_t *dev) {
+
+  // Retrieve compatible formats
+  esp_cam_sensor_format_array_t cam_fmt_array = {0};
+  esp_cam_sensor_query_format(dev, &cam_fmt_array);
+  const esp_cam_sensor_format_t *match = NULL;
+  for (int i = 0; i < cam_fmt_array.count; i++) {
+    // Check if dimensions match
+    if (cam_fmt_array.format_array[i].width == hres &&
+        cam_fmt_array.format_array[i].height == vres) {
+      // Record the matching format
+      match = &cam_fmt_array.format_array[i];
+      // Check if the FPS value matches as well
+      if (*fps == 0 || cam_fmt_array.format_array[i].fps == *fps) {
+        break;
+      }
+    }
+  }
+
+  // If no match was found, report error and return
+  ESP_RETURN_ON_FALSE(match != NULL, ESP_ERR_INVALID_ARG, TAG,
+                      "Sensor doesn't support requested format %ux%u", hres, vres);
+
+  // If the caller requested a specific FPS, ensure the sensor offers it for this resolution
+  ESP_RETURN_ON_FALSE(*fps == 0 || match->fps == *fps, ESP_ERR_INVALID_ARG, TAG,
+                      "Sensor doesn't support requested FPS %u for %ux%u", *fps, hres, vres);
+
+  // Try to set the matching format
+  ESP_RETURN_ON_ERROR(esp_cam_sensor_set_format(dev, match), TAG,
+                      "Failed to set sensor format to %ux%u", hres, vres);
+
+  // If caller didn't request a particular FPS, expose the sensor's default for this format
+  if (*fps == 0)
+    *fps = match->fps;
+
+  return ESP_OK;
 }

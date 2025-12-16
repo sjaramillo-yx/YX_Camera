@@ -15,6 +15,10 @@
  */
 static const char *TAG = "Provision Claimer";
 /**
+ * @brief The current state of the state machine
+ */
+static ClaimerState claimer_state = UNINITIALIZED;
+/**
  * @brief A structure for MQTT arguments passed to the provisioning tasks
  */
 static mqtt_args_t mqtt_args = {0};
@@ -36,6 +40,8 @@ static char certificate_id[1024];
  * @brief The Task handle for the provisioning task
  */
 static TaskHandle_t provision_handle;
+
+static SemaphoreHandle_t provisioning_semphr;
 
 /* ---------- MQTT handlers ---------- */
 /**
@@ -134,6 +140,7 @@ static void mqtt_data_handler(void *handler_args, esp_event_base_t base, int32_t
   case SUSCRIBED_CERT_CREATION:
     claimer_state = GOT_CERTIFICATE;
     // Extract certificate from payload
+    /// TODO: Handle errors or missing items
     token  = cJSON_GetObjectItem(payload, "certificateOwnershipToken");
     cert   = cJSON_GetObjectItem(payload, "certificatePem");
     key    = cJSON_GetObjectItem(payload, "privateKey");
@@ -194,8 +201,13 @@ static void provision_task(void *p) {
   nvsman_save_certs(obtained_certificates);
   free(obtained_certificates);
 
-  /* Reboot */
-  esp_restart();
+  /* Close the MQTT client */
+  esp_mqtt_client_disconnect(client);
+  esp_mqtt_client_stop(client);
+  esp_mqtt_client_destroy(client);
+
+  /* Signal the end of provisioning by giving the semaphore */
+  xSemaphoreGive(provisioning_semphr);
 
   /* Delete this task */
   vTaskDelete(NULL);
@@ -203,7 +215,11 @@ static void provision_task(void *p) {
 
 /*--------- Functions ----------*/
 esp_err_t provision_begin(esp_mqtt_client_handle_t mqtt_client) {
+  provisioning_semphr     = xSemaphoreCreateBinary();
   BaseType_t task_created = xTaskCreate(provision_task, "BeginProvision", 4096, (void *)mqtt_client,
                                         5, &provision_handle);
+  /// TODO: Handle task not created event here
+  xSemaphoreTake(provisioning_semphr, portMAX_DELAY);
+  /// TODO: Check that the semaphore was correctly taken
   return (task_created == pdTRUE ? ESP_OK : ESP_FAIL);
 }
