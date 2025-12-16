@@ -9,6 +9,7 @@
 #include "mqtt_worker.h"
 #include "nvs_manager.h"
 #include "provision_claimer.h"
+#include "recording_worker.h"
 
 static const char *TAG = "MQTT Worker"; /**< Logging tag for this module. */
 
@@ -96,8 +97,9 @@ static void mqtt_connected_handler(void *handler_args, esp_event_base_t base, in
  */
 static void mqtt_data_handler(void *handler_args, esp_event_base_t base, int32_t event_id,
                               void *event_data) {
-  esp_mqtt_event_handle_t event = event_data;
-  cJSON                  *payload;
+  esp_err_t               ret                  = ESP_OK;
+  esp_mqtt_event_handle_t event                = event_data;
+  cJSON                  *payload              = NULL;
   char                    received_topic[1024] = "";
   char                    topic_name[1024]     = "";
 
@@ -108,65 +110,21 @@ static void mqtt_data_handler(void *handler_args, esp_event_base_t base, int32_t
   /* -- Recording start command --*/
   snprintf(topic_name, 1024, "yx/recordings/%s/start", mqtt_cert_data.thing_name);
   if (!strcmp(received_topic, topic_name)) {
-    /// TODO: Encapsulate this in a helper function
     /// TODO: Handle payload being sent in multiple events
     payload = cJSON_ParseWithLength(event->data, event->data_len);
-    cJSON *res, *qps;
-    // Extract array parameters from payload
-    res = cJSON_GetObjectItem(payload, "resolution");
-    qps = cJSON_GetObjectItem(payload, "QPs");
-    // Check that the whole payload is correctly formatted
-    /// TODO: Fix this mess
-    if (cJSON_IsNumber(cJSON_GetObjectItem(payload, "version")) && cJSON_IsArray(res) &&
-        cJSON_GetArraySize(res) == 2 && cJSON_IsNumber(cJSON_GetArrayItem(res, 0)) &&
-        cJSON_IsNumber(cJSON_GetArrayItem(res, 1)) &&
-        cJSON_IsNumber(cJSON_GetObjectItem(payload, "fps")) && cJSON_IsArray(qps) &&
-        cJSON_GetArraySize(qps) == 2 && cJSON_IsNumber(cJSON_GetArrayItem(qps, 0)) &&
-        cJSON_IsNumber(cJSON_GetArrayItem(qps, 1)) &&
-        cJSON_IsNumber(cJSON_GetObjectItem(payload, "timeout")) &&
-        cJSON_IsString(cJSON_GetObjectItem(payload, "transactionId")) &&
-        cJSON_IsNumber(cJSON_GetObjectItem(payload, "targetBitrate"))) {
-      rec_conf.hres            = (uint16_t)cJSON_GetArrayItem(res, 0)->valuedouble;
-      rec_conf.vres            = (uint16_t)cJSON_GetArrayItem(res, 1)->valuedouble;
-      rec_conf.fps             = (uint16_t)cJSON_GetObjectItem(payload, "fps")->valuedouble;
-      rec_conf.qp_min          = (uint8_t)cJSON_GetArrayItem(qps, 0)->valuedouble;
-      rec_conf.qp_max          = (uint8_t)cJSON_GetArrayItem(qps, 1)->valuedouble;
-      rec_conf.timeout_seconds = (uint32_t)cJSON_GetObjectItem(payload, "timeout")->valuedouble;
-      strncpy(rec_conf.transaction_id, cJSON_GetObjectItem(payload, "transactionId")->valuestring,
-              sizeof(rec_conf.transaction_id) - 1);
-      rec_conf.transaction_id[sizeof(rec_conf.transaction_id) - 1] = '\0';
-      rec_conf.target_bitrate =
-          (uint32_t)cJSON_GetObjectItem(payload, "targetBitrate")->valuedouble;
+    ESP_GOTO_ON_ERROR(parse_recording_start(payload, &rec_conf), cleanup, TAG,
+                      "Couldn't parse recording start payload");
+    // For now, print the values
+    rec_print_config(&rec_conf);
+    // Post the event
+    esp_event_post_to(rec_event_h, RECORDING_EVENTS, REC_BEGIN, (void *)&rec_conf, sizeof(rec_conf),
+                      100);
+    // Subscribe to relevant topic
+    snprintf(topic_name, 1024, "yx/recordings/%s/%s/commands", mqtt_cert_data.thing_name,
+             rec_conf.transaction_id);
+    esp_mqtt_client_subscribe(client, topic_name, 0);
 
-      cJSON *job           = cJSON_GetObjectItemCaseSensitive(payload, "jobId");
-      rec_conf.has_aws_job = cJSON_IsString(job);
-      if (rec_conf.has_aws_job) {
-        strncpy(rec_conf.aws_job_id, job->valuestring, sizeof(rec_conf.aws_job_id) - 1);
-        rec_conf.aws_job_id[sizeof(rec_conf.aws_job_id) - 1] = '\0';
-      } else {
-        rec_conf.aws_job_id[0] = '\0';
-      }
-
-      // For now, print the values
-      /// TODO: For each value, check for not NULL and data type
-      ESP_LOGI(TAG, "Received recording parameters:");
-      ESP_LOGI(TAG, "\t\tResolution:%dx%d", rec_conf.hres, rec_conf.vres);
-      ESP_LOGI(TAG, "\t\tFPS:%d", rec_conf.fps);
-      ESP_LOGI(TAG, "\t\tQPs:%d (max), %d (min)", rec_conf.qp_max, rec_conf.qp_min);
-      ESP_LOGI(TAG, "\t\tTimeout:%d", rec_conf.timeout_seconds);
-      ESP_LOGI(TAG, "\t\tTransaction ID:%s", rec_conf.transaction_id);
-      ESP_LOGI(TAG, "\t\tTarget bitrate:%d", rec_conf.target_bitrate);
-      ESP_LOGI(TAG, "\t\tJob ID:%s", rec_conf.has_aws_job ? rec_conf.aws_job_id : "N/A");
-      // Post the event
-      esp_event_post_to(rec_event_h, RECORDING_EVENTS, REC_BEGIN, (void *)&rec_conf,
-                        sizeof(rec_conf), 100);
-      // Subscribe to relevant topic
-      snprintf(topic_name, 1024, "yx/recordings/%s/%s/commands", mqtt_cert_data.thing_name,
-               rec_conf.transaction_id);
-      esp_mqtt_client_subscribe(client, topic_name, 0);
-    }
-    // cleanup
-    cJSON_Delete(payload);
+    goto cleanup;
   }
 
   /* -- In progress recording topic --*/
@@ -179,8 +137,7 @@ static void mqtt_data_handler(void *handler_args, esp_event_base_t base, int32_t
     if (!cJSON_IsString(cJSON_GetObjectItem(payload, "command")) ||
         !cJSON_IsString(cJSON_GetObjectItem(payload, "transactionId"))) {
       ESP_LOGW(TAG, "Invalid payload format");
-      cJSON_Delete(payload);
-      return;
+      goto cleanup;
     }
     // Extract the command from the payload
     char *command = cJSON_GetObjectItem(payload, "command")->valuestring;
@@ -192,7 +149,14 @@ static void mqtt_data_handler(void *handler_args, esp_event_base_t base, int32_t
       esp_event_post_to(rec_event_h, RECORDING_EVENTS, REC_STOP, (void *)rec_stop_id,
                         sizeof(rec_stop_id), 100);
     }
+    goto cleanup;
+  }
+cleanup:
+  if (payload)
     cJSON_Delete(payload);
+  if (ret != ESP_OK) {
+    ESP_LOGE(TAG, "Encountered error: %s", esp_err_to_name(ret));
+    /// TODO: publish error event
   }
 }
 
@@ -276,6 +240,7 @@ static void mqttworker_rec_handler(void *handler_arg, esp_event_base_t event_bas
 static esp_err_t mqttworker_defaults(void) {
   mqtt_cfg.credentials.authentication.certificate = (const char *)client_cert_pem_start;
   mqtt_cfg.credentials.authentication.key         = (const char *)client_key_pem_start;
+  mqtt_cfg.credentials.client_id                  = (const char *)mqtt_cert_data.thing_name;
   if (client != NULL)
     return esp_mqtt_set_config(client, &mqtt_cfg);
   client = esp_mqtt_client_init(&mqtt_cfg);
@@ -303,6 +268,7 @@ esp_err_t mqttworker_begin(void) {
   ESP_LOGD(TAG, "ThingName is %s", mqtt_cert_data.thing_name);
   mqtt_cfg.credentials.authentication.certificate = (const char *)mqtt_cert_data.client_crt;
   mqtt_cfg.credentials.authentication.key         = (const char *)mqtt_cert_data.client_key;
+  mqtt_cfg.credentials.client_id                  = (const char *)mqtt_cert_data.thing_name;
   client                                          = esp_mqtt_client_init(&mqtt_cfg);
 
   /* Register the event handlers */

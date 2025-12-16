@@ -28,3 +28,16 @@ esp_err_t rec_eventloop_get_handle(esp_event_loop_handle_t *out_handle) {
   *out_handle = rec_eventloop_handle;
   return ESP_OK;
 }
+
+esp_err_t rec_print_config(recording_conf_t *conf) {
+  /// TODO: For each value, check for not NULL and data type
+  ESP_LOGI(TAG, "Received recording parameters:");
+  ESP_LOGI(TAG, "\t\tResolution:%dx%d", conf->hres, conf->vres);
+  ESP_LOGI(TAG, "\t\tFPS:%d", conf->fps);
+  ESP_LOGI(TAG, "\t\tQPs:%d (max), %d (min)", conf->qp_max, conf->qp_min);
+  ESP_LOGI(TAG, "\t\tTimeout:%d", conf->timeout_seconds);
+  ESP_LOGI(TAG, "\t\tTransaction ID:%s", conf->transaction_id);
+  ESP_LOGI(TAG, "\t\tTarget bitrate:%d", conf->target_bitrate);
+  ESP_LOGI(TAG, "\t\tJob ID:%s", conf->has_aws_job ? conf->aws_job_id : "N/A");
+  return ESP_OK;
+}

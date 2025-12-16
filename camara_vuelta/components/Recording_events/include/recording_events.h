@@ -8,6 +8,7 @@
  *
  * @ingroup recording_events
  */
+#pragma once
 
 /* Espressif includes */
 #include <esp_check.h>
@@ -17,8 +18,6 @@
 /* Standard includes*/
 /* FreeRTOS includes*/
 /* Custom includes */
-
-#pragma once
 
 #ifdef __cplusplus
 extern "C" {
@@ -82,6 +81,11 @@ esp_err_t rec_eventloop_create();
  * @brief Get the recording event loop handle
  */
 esp_err_t rec_eventloop_get_handle(esp_event_loop_handle_t *out_handle);
+
+/**
+ * @brief Print a `recording_conf_t` structure
+ */
+esp_err_t rec_print_config(recording_conf_t *conf);
 
 #ifdef __cplusplus
 }
