@@ -248,7 +248,6 @@ static void mqttworker_rec_handler(void *handler_arg, esp_event_base_t event_bas
 static esp_err_t mqttworker_defaults(void) {
   mqtt_cfg.credentials.authentication.certificate = (const char *)client_cert_pem_start;
   mqtt_cfg.credentials.authentication.key         = (const char *)client_key_pem_start;
-  mqtt_cfg.credentials.client_id                  = (const char *)mqtt_cert_data.thing_name;
   if (client != NULL)
     return esp_mqtt_set_config(client, &mqtt_cfg);
   client = esp_mqtt_client_init(&mqtt_cfg);

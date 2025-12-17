@@ -191,7 +191,7 @@ static void provision_task(void *p) {
   /* Write to NVS */
   cert_data_t *obtained_certificates = malloc(sizeof(cert_data_t));
   if (obtained_certificates == NULL) {
-    ESP_LOGE(TAG, "Unsufficient memory!");
+    ESP_LOGE(TAG, "Insufficient memory!");
   }
   /// TODO: Pass this strings as arguments instead of a structure to save memory
   snprintf(obtained_certificates->client_crt, sizeof(device_certificate), device_certificate);
