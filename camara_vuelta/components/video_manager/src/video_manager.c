@@ -900,3 +900,5 @@ end:
   /// TODO: Cleanup
   return ret;
 }
+
+bool vman_is_recording() { return recording; }

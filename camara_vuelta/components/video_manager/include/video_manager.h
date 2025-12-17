@@ -65,6 +65,11 @@ esp_err_t vman_stop_recording(void);
  */
 esp_err_t vman_getJSON(cJSON **vmanJSON);
 
+/**
+ * @brief Check if Video Manager is currently recording
+ */
+bool vman_is_recording();
+
 #ifdef __cplusplus
 }
 #endif

@@ -297,6 +297,7 @@ esp_err_t mqttworker_begin(void) {
 esp_err_t mqttworker_publish_initial_state(cJSON *sdJSON, cJSON *vmanJSON) {
   esp_err_t      ret     = ESP_OK;
   cJSON         *payload = cJSON_CreateObject();
+  char          *payload_str;
   struct timeval system_time;
 
   /* Get information */
@@ -307,8 +308,32 @@ esp_err_t mqttworker_publish_initial_state(cJSON *sdJSON, cJSON *vmanJSON) {
   cJSON_AddItemToObject(payload, "sdCardInfo", sdJSON);
   cJSON_AddItemToObject(payload, "videoInfo", vmanJSON);
   cJSON_AddStringToObject(payload, "firmwareVersion", esp_app_get_description()->version);
-  int msg_id = esp_mqtt_client_publish(client, "yx/cameras/hello", cJSON_Print(payload), 0, 1, 0);
+  payload_str = cJSON_Print(payload);
+  int msg_id  = esp_mqtt_client_publish(client, "yx/cameras/hello", payload_str, 0, 1, 0);
   ESP_LOGD(TAG, "sent publish successful, msg_id=%d", msg_id);
+  cJSON_free(payload_str);
+  cJSON_Delete(payload);
+  return ret;
+  /// TODO: Handle errors
+}
+
+esp_err_t mqttworker_publish_current_state(cJSON *sdJSON, bool is_recording) {
+  esp_err_t      ret     = ESP_OK;
+  cJSON         *payload = cJSON_CreateObject();
+  char          *payload_str;
+  struct timeval system_time;
+
+  /* Get information */
+  gettimeofday(&system_time, NULL);
+  /* Build the payload */
+  cJSON_AddStringToObject(payload, "thingName", mqtt_cert_data.thing_name);
+  cJSON_AddNumberToObject(payload, "deviceTime", (uint64_t)system_time.tv_sec);
+  cJSON_AddItemToObject(payload, "sdCardInfo", sdJSON);
+  cJSON_AddBoolToObject(payload, "isRecording", is_recording);
+  payload_str = cJSON_Print(payload);
+  int msg_id  = esp_mqtt_client_publish(client, "yx/cameras/status", payload_str, 0, 1, 0);
+  ESP_LOGD(TAG, "sent publish successful, msg_id=%d", msg_id);
+  cJSON_free(payload_str);
   cJSON_Delete(payload);
   return ret;
   /// TODO: Handle errors

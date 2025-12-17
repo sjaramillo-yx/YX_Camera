@@ -54,4 +54,10 @@ void app_main(void) {
   vman_getJSON(&vmanJSON);
   // Publish initial state
   mqttworker_publish_initial_state(sdJSON, vmanJSON);  // This also frees cJSON memory
+
+  while (true) {
+    vTaskDelay(pdMS_TO_TICKS(30000));
+    sdman_getJSON(&sdJSON);
+    mqttworker_publish_current_state(sdJSON, vman_is_recording());  // This also frees cJSON memory
+  }
 }
