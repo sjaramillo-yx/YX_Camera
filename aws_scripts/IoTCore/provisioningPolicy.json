@@ -1,0 +1,35 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": "iot:Connect",
+      "Resource": "*"
+    },
+    {
+      "Effect": "Allow",
+      "Action": [
+        "iot:Publish",
+        "iot:Receive"
+      ],
+      "Resource": [
+        "arn:aws:iot:*:*:topic/$aws/certificates/create/json",
+        "arn:aws:iot:*:*:topic/$aws/certificates/create/json/accepted",
+        "arn:aws:iot:*:*:topic/$aws/certificates/create/json/rejected",
+        "arn:aws:iot:*:*:topic/$aws/provisioning-templates/cameraTemplate/provision/json",
+        "arn:aws:iot:*:*:topic/$aws/provisioning-templates/cameraTemplate/provision/json/accepted",
+        "arn:aws:iot:*:*:topic/$aws/provisioning-templates/cameraTemplate/provision/json/rejected"
+      ]
+    },
+    {
+      "Effect": "Allow",
+      "Action": "iot:Subscribe",
+      "Resource": [
+        "arn:aws:iot:*:*:topicfilter/$aws/certificates/create/json/accepted",
+        "arn:aws:iot:*:*:topicfilter/$aws/certificates/create/json/rejected",
+        "arn:aws:iot:*:*:topicfilter/$aws/provisioning-templates/cameraTemplate/provision/json/accepted",
+        "arn:aws:iot:*:*:topicfilter/$aws/provisioning-templates/cameraTemplate/provision/json/rejected"
+      ]
+    }
+  ]
+}
