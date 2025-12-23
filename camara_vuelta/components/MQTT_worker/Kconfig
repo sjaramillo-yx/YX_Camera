@@ -2,12 +2,12 @@ menu "Provisioning configuration"
 
     config TEMPLATE_NAME
         string "The name of the Thing template to be used"
-        default "TestTemplate"
+        default "cameraTemplate"
 endmenu
 
 menu "MQTT Worker configuration"
     
     config AWS_ENDPOINT
         string "The AWS endpoint to be used"
-        default  "a21g6vkmxju0d9-ats.iot.sa-east-1.amazonaws.com"
+        default  ""
 endmenu
