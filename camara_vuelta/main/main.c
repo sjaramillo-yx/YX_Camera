@@ -5,6 +5,8 @@
 /* Standard includes*/
 #include <cJSON.h>
 /* FreeRTOS includes*/
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 /* Custom includes */
 #include "recording_events.h"
 ESP_EVENT_DEFINE_BASE(RECORDING_EVENTS);  // Event base must be declared here (not sure why)
@@ -13,22 +15,37 @@ ESP_EVENT_DEFINE_BASE(RECORDING_EVENTS);  // Event base must be declared here (n
 #include "mqtt_worker.h"
 #include "video_manager.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 static const char *TAG = "VueltaCAM";
+
+static esp_err_t publish_rec_state() {
+  esp_err_t ret       = ESP_OK;
+  cJSON    *rec_state = cJSON_CreateObject();
+  char     *rec_state_str;
+  /// TODO: check for errors
+  vman_get_rec_json(&rec_state);
+  rec_state_str = cJSON_Print(rec_state);
+  mqttworker_publish_recording_state(rec_state);  // This also frees cJSON memory
+  return ret;
+}
 
 void app_main(void) {
   ESP_LOGI(TAG, "[APP] Free memory: %" PRIu32 " bytes", esp_get_free_heap_size());
   ESP_LOGI(TAG, "[APP] IDF version: %s", esp_get_idf_version());
-  /// TODO: Add firmware version
+  ESP_LOGI(TAG, "[APP] Firmware version: %s", esp_app_get_description()->version);
 
   // Set log levels
   esp_log_level_set("*", ESP_LOG_INFO);
-  esp_log_level_set("mqtt_client", ESP_LOG_DEBUG);
+  esp_log_level_set("mqtt_client", ESP_LOG_INFO);
   esp_log_level_set("transport_base", ESP_LOG_INFO);
   esp_log_level_set("transport", ESP_LOG_INFO);
   esp_log_level_set("Provision Claimer", ESP_LOG_INFO);
-  esp_log_level_set("MQTT Worker", ESP_LOG_DEBUG);
+  esp_log_level_set("MQTT Worker", ESP_LOG_INFO);
   esp_log_level_set("NVS Manager", ESP_LOG_INFO);
-  esp_log_level_set("Video Manager", ESP_LOG_DEBUG);
+  esp_log_level_set("Video Manager", ESP_LOG_INFO);
 
   // Create the recording event loop
   rec_eventloop_create();
@@ -59,5 +76,12 @@ void app_main(void) {
     vTaskDelay(pdMS_TO_TICKS(30000));
     sdman_getJSON(&sdJSON);
     mqttworker_publish_current_state(sdJSON, vman_is_recording());  // This also frees cJSON memory
+    if (vman_is_recording()) {
+      publish_rec_state();
+    }
   }
 }
+
+#ifdef __cplusplus
+}
+#endif

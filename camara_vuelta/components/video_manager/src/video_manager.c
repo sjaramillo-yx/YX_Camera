@@ -7,6 +7,18 @@
 
 static const char *TAG = "Video Manager" /**< Logging tag for this module. */;
 
+/* ================ MACROS ================ */
+#define ESP_GOTO_ON_ERROR_SAVE_STR(expr, label, log_tag, fmt, ...)                                 \
+  do {                                                                                             \
+    esp_err_t __err_rc = (expr);                                                                   \
+    if (__err_rc != ESP_OK) {                                                                      \
+      snprintf((err_str), sizeof(err_str), (fmt), ##__VA_ARGS__);                                  \
+      ret = __err_rc;                                                                              \
+      ESP_LOGE((log_tag), "%s (%s)", (err_str), esp_err_to_name(__err_rc));                        \
+      goto label;                                                                                  \
+    }                                                                                              \
+  } while (0)
+
 /* ================ STRUCTS ================ */
 typedef struct {
   char             *data;         // Stage buffer
@@ -52,6 +64,9 @@ static const uint64_t STAGE_LIMIT =
 FILE *fp = NULL;
 
 // Types and structs
+/**
+ * @brief A data chunk for the encoder
+ */
 typedef struct {
   uint8_t *ptr;
   size_t   cap;
@@ -157,6 +172,10 @@ static recording_conf_t        rec_conf;
 static recording_error_t       rec_error;
 static recording_file_t        rec_file;
 static esp_event_loop_handle_t rec_event_h;
+
+// Recording statistics
+static int      current_fps     = 0;
+static uint64_t current_bitrate = 0;
 
 /*========================= ISR Callbacks =========================*/
 
@@ -452,8 +471,8 @@ static void capture_encode_task(void *arg) {
   esp_h264_enc_out_frame_t *out               = NULL;
   esp_h264_enc_in_frame_t   in                = {0};
   uint64_t                  now               = esp_timer_get_time();
-  uint64_t                  encoded           = 0;
   int                       frames_per_second = 0;
+  uint64_t                  encoded           = 0;
   uint64_t                  next_encode_time  = 0;
   uint16_t                  last_output_fps   = s_output_fps;
 
@@ -483,6 +502,7 @@ static void capture_encode_task(void *arg) {
     };
     // Ask the camera sensor to fill the buffer
     ESP_LOGD(TAG, "[%s] Receiving %d bytes from sensor", pcTaskGetName(NULL), s_frame_bytes);
+    /// TODO: Remove ESP_CAM_CTRL_MAX_DELAT and change ESP_ERROR_CHECK for ESP_GOTO_ON_ERROR
     ESP_ERROR_CHECK(esp_cam_ctlr_receive(s_cam, &trans, ESP_CAM_CTLR_MAX_DELAY));
 
     const uint16_t current_output_fps = s_output_fps ? s_output_fps : DEFAULT_FPS;
@@ -534,6 +554,10 @@ static void capture_encode_task(void *arg) {
         esp_h264_enc_get_fps(&param_hd->base, &set_fps);
         ESP_LOGI(TAG, "Bitrate = %lld bps = %lld kB/s, Set bitrate= %ld bps, FPS=%d, Set FPS=%d",
                  encoded * 8, encoded >> 10, set_bitrate, frames_per_second, set_fps);
+        // Set global statistics
+        current_bitrate = encoded * 8;
+        current_fps     = frames_per_second;
+        // Reset counters
         encoded = frames_per_second = 0;
         now                         = esp_timer_get_time();
       }
@@ -605,50 +629,46 @@ static void create_queues(void) {
 /*================== Event Handlers ==================*/
 static void vman_rec_handler(void *handler_arg, esp_event_base_t event_base, int32_t event_id,
                              void *event_data) {
-  ESP_LOGI(TAG, "Received event %s:%d", (char *)event_base, event_id);
-  recording_conf_t *rec_params;
-  esp_err_t         started = ESP_OK;
-  char              rec_filename[132];
-  char             *stop_id;
+  ESP_LOGD(TAG, "Received event %s:%d", (char *)event_base, event_id);
+  esp_err_t started = ESP_OK;
+  char      rec_filename[132];
+  char     *stop_id;
   switch (event_id) {
   case REC_BEGIN:
-    rec_params = (recording_conf_t *)event_data;
+    rec_conf = *(recording_conf_t *)event_data;
     // For now, print the values
     ESP_LOGI(TAG, "Received recording parameters:");
-    ESP_LOGI(TAG, "\t\tResolution:%dx%d", rec_params->hres, rec_params->vres);
-    ESP_LOGI(TAG, "\t\tFPS:%d", rec_params->fps);
-    ESP_LOGI(TAG, "\t\tQPs:%d (max), %d (min)", rec_params->qp_max, rec_params->qp_min);
-    ESP_LOGI(TAG, "\t\tTimeout:%d", rec_params->timeout_seconds);
-    ESP_LOGI(TAG, "\t\tTransaction ID:%s", rec_params->transaction_id);
-    ESP_LOGI(TAG, "\t\tTarget bitrate:%d", rec_params->target_bitrate);
-    ESP_LOGI(TAG, "\t\tJob ID:%s", rec_params->aws_job_id);
+    ESP_LOGI(TAG, "\t\tResolution:%dx%d", rec_conf.hres, rec_conf.vres);
+    ESP_LOGI(TAG, "\t\tFPS:%d", rec_conf.fps);
+    ESP_LOGI(TAG, "\t\tQPs:%d (max), %d (min)", rec_conf.qp_max, rec_conf.qp_min);
+    ESP_LOGI(TAG, "\t\tTimeout:%d", rec_conf.timeout_seconds);
+    ESP_LOGI(TAG, "\t\tTransaction ID:%s", rec_conf.transaction_id);
+    ESP_LOGI(TAG, "\t\tTarget bitrate:%d", rec_conf.target_bitrate);
+    ESP_LOGI(TAG, "\t\tJob ID:%s", rec_conf.aws_job_id);
     // Reconfigure the video pipeline for the requested resolution
-    esp_err_t cfg_err =
-        vman_configure_resolution(rec_params->hres, rec_params->vres, rec_params->fps);
+    esp_err_t cfg_err = vman_configure_resolution(rec_conf.hres, rec_conf.vres, rec_conf.fps);
     if (cfg_err != ESP_OK) {
       rec_error.error_code = cfg_err;
-      strncpy(rec_error.transaction_id, rec_params->transaction_id,
-              sizeof(rec_error.transaction_id));
+      strncpy(rec_error.transaction_id, rec_conf.transaction_id, sizeof(rec_error.transaction_id));
       snprintf(rec_error.error_message, sizeof(rec_error.error_message),
-               "Failed to configure resolution to %ux%u (%s)", rec_params->hres, rec_params->vres,
+               "Failed to configure resolution to %ux%u (%s)", rec_conf.hres, rec_conf.vres,
                esp_err_to_name(cfg_err));
       snprintf(rec_error.errored_module, sizeof(rec_error.errored_module), TAG);
       esp_event_post_to(rec_event_h, RECORDING_EVENTS, REC_ERROR, (void *)&rec_error,
                         sizeof(rec_error), 100);
       break;
     }
-    apply_encoder_runtime_config(rec_params);
+    apply_encoder_runtime_config(&rec_conf);
     // Begin the recording
-    snprintf(rec_filename, sizeof(rec_filename), "%s.bin", rec_params->transaction_id);
+    snprintf(rec_filename, sizeof(rec_filename), "%s.bin", rec_conf.transaction_id);
     started = vman_start_recording(rec_filename);
     if (started != ESP_OK) {
       /// TODO: Handle errors here
       break;
     }
     // Use the true configured parameters
-    rec_params->fps            = s_output_fps;
-    rec_params->target_bitrate = enc_cfg.rc.bitrate;
-    rec_conf                   = *rec_params;
+    rec_conf.fps            = s_output_fps;
+    rec_conf.target_bitrate = enc_cfg.rc.bitrate;
     strncpy(rec_file.transaction_id, rec_conf.transaction_id, sizeof(rec_file.transaction_id) - 1);
     rec_file.transaction_id[sizeof(rec_file.transaction_id) - 1] = '\0';
     esp_event_post_to(rec_event_h, RECORDING_EVENTS, REC_STARTED, (void *)&rec_conf,
@@ -734,24 +754,27 @@ esp_err_t vman_init(void) {
 }
 
 esp_err_t vman_start_recording(char *filename) {
-  esp_err_t ret = ESP_OK;
+  esp_err_t ret          = ESP_OK;
+  char      err_str[128] = "";
   // Check there's no other recording in progress
   ESP_GOTO_ON_FALSE(!recording, ESP_ERR_INVALID_STATE, fail, TAG, "Recording already in progress");
   // Check that the Video Manager was already initialized
   ESP_GOTO_ON_FALSE(initialized, ESP_ERR_INVALID_STATE, fail, TAG,
                     "Video Manager has not been initialized");
   // Create the file for the recording
-  ESP_GOTO_ON_ERROR(sdman_open_file(filename, "wb", &fp), fail, TAG, "Couldn't create the file");
+  ESP_GOTO_ON_ERROR_SAVE_STR(sdman_open_file(filename, "wb", &fp), fail, TAG,
+                             "Couldn't create the file");
   snprintf(rec_file.filename, sizeof(rec_file.filename), filename);
   rec_file.size = rec_file.recorded_seconds = 0;
   // Create a new hardware encoder using the configuration
-  ESP_GOTO_ON_ERROR(esp_h264_enc_hw_new(&enc_cfg, &s_enc), fail, TAG,
-                    "Failed to create H264 encoder");
+  ESP_GOTO_ON_ERROR_SAVE_STR(esp_h264_enc_hw_new(&enc_cfg, &s_enc), fail, TAG,
+                             "Failed to create H264 encoder");
   // Open the encoder and check for errors
-  ESP_GOTO_ON_ERROR(esp_h264_enc_open(s_enc), fail, TAG, "Failed opening H264 encoder");
+  ESP_GOTO_ON_ERROR_SAVE_STR(esp_h264_enc_open(s_enc), fail, TAG, "Failed opening H264 encoder");
 
   // Start the camera controller
-  ESP_GOTO_ON_ERROR(esp_cam_ctlr_start(s_cam), fail, TAG, "Couldn't start the camera controller");
+  ESP_GOTO_ON_ERROR_SAVE_STR(esp_cam_ctlr_start(s_cam), fail, TAG,
+                             "Couldn't start the camera controller");
 
   // Seed the queues
   for (int i = 0; i < FRAME_BUF_COUNT; ++i) {
@@ -779,6 +802,13 @@ fail:
     fclose(fp);
     fp = NULL;
   }
+  rec_error.error_code = ret;
+  strncpy(rec_error.transaction_id, rec_conf.transaction_id, sizeof(rec_error.transaction_id));
+  /// TODO: Propagate error messages to rec_error
+  snprintf(rec_error.error_message, sizeof(rec_error.error_message), err_str, esp_err_to_name(ret));
+  snprintf(rec_error.errored_module, sizeof(rec_error.errored_module), TAG);
+  esp_event_post_to(rec_event_h, RECORDING_EVENTS, REC_ERROR, (void *)&rec_error, sizeof(rec_error),
+                    100);
   /// TODO: If the encoded got created, delete it
   return ret;
 }
@@ -902,3 +932,27 @@ end:
 }
 
 bool vman_is_recording() { return recording; }
+
+esp_err_t vman_get_rec_json(cJSON **vman_rec_json) {
+  esp_err_t ret = ESP_OK;
+  // Check that a recording is in process
+  ESP_GOTO_ON_FALSE(recording, ESP_ERR_INVALID_STATE, end, TAG,
+                    "(%s) No recording currently in process!", __func__);
+  ESP_GOTO_ON_FALSE(cJSON_AddStringToObject(*vman_rec_json, "status", "ONGOING"), ESP_FAIL, end,
+                    TAG, "(%s) Couldn't add status to JSON", __func__);
+  ESP_GOTO_ON_FALSE(
+      cJSON_AddStringToObject(*vman_rec_json, "transactionId", rec_conf.transaction_id), ESP_FAIL,
+      end, TAG, "(%s) Couldn't add transactionId to JSON", __func__);
+  ESP_GOTO_ON_FALSE(
+      cJSON_AddNumberToObject(*vman_rec_json, "recordedSeconds",
+                              (esp_timer_get_time() - rec_file.recorded_seconds) / 1000000UL),
+      ESP_FAIL, end, TAG, "(%s) Couldn't add recordedSeconds to JSON", __func__);
+  // Build FPS and bitrate information fields
+  ESP_GOTO_ON_FALSE(cJSON_AddNumberToObject(*vman_rec_json, "fps", current_fps), ESP_FAIL, end, TAG,
+                    "(%s) Couldn't add current_fps to fps_info", __func__);
+  ESP_GOTO_ON_FALSE(cJSON_AddNumberToObject(*vman_rec_json, "bitrate", current_bitrate), ESP_FAIL,
+                    end, TAG, "(%s) Couldn't add current_bitrate to bps_info", __func__);
+
+end:
+  return ret;
+}

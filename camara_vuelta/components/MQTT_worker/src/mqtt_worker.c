@@ -184,7 +184,7 @@ static void mqttworker_rec_handler(void *handler_arg, esp_event_base_t event_bas
     cJSON_AddItemToArray(qps, cJSON_CreateNumber(vman_rec_params->qp_max));
     cJSON_AddItemToArray(res, cJSON_CreateNumber(vman_rec_params->hres));
     cJSON_AddItemToArray(res, cJSON_CreateNumber(vman_rec_params->vres));
-    cJSON_AddNumberToObject(payload, "fps", vman_rec_params->fps);
+    cJSON_AddNumberToObject(payload, "targetFps", vman_rec_params->fps);
     cJSON_AddNumberToObject(payload, "targetBitrate", vman_rec_params->target_bitrate);
     cJSON_AddNumberToObject(payload, "timeout", vman_rec_params->timeout_seconds);
     snprintf(topic_name, sizeof(topic_name), "yx/recordings/%s/%s/status",
@@ -335,6 +335,22 @@ esp_err_t mqttworker_publish_current_state(cJSON *sdJSON, bool is_recording) {
   ESP_LOGD(TAG, "sent publish successful, msg_id=%d", msg_id);
   cJSON_free(payload_str);
   cJSON_Delete(payload);
+  return ret;
+  /// TODO: Handle errors
+}
+
+esp_err_t mqttworker_publish_recording_state(cJSON *recJSON) {
+  esp_err_t ret = ESP_OK;
+  char     *payload_str;
+  char      topic_name[1024] = "";
+
+  payload_str = cJSON_Print(recJSON);
+  snprintf(topic_name, 1024, "yx/recordings/%s/%s/status", mqtt_cert_data.thing_name,
+           rec_conf.transaction_id);
+  int msg_id = esp_mqtt_client_publish(client, topic_name, payload_str, 0, 1, 0);
+  ESP_LOGD(TAG, "sent publish successful, msg_id=%d", msg_id);
+  cJSON_free(payload_str);
+  cJSON_Delete(recJSON);
   return ret;
   /// TODO: Handle errors
 }
