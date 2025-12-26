@@ -62,12 +62,37 @@ upsert_iot_policy() {
   fi
 }
 
+ensure_room_for_template_version() {
+  # Provisioning templates can have max 5 versions; delete an older non-default if we're at the limit
+  local template_name="$1"
+  local non_default_count oldest_non_default
+
+  non_default_count="$(aws --profile "${PROFILE}" iot list-provisioning-template-versions \
+    --template-name "$template_name" \
+    --query 'length(versions[?isDefaultVersion==`false`])' \
+    --output text)"
+
+  if [[ "$non_default_count" -ge 4 ]]; then
+    oldest_non_default="$(aws --profile "${PROFILE}" iot list-provisioning-template-versions \
+      --template-name "$template_name" \
+      --query 'sort_by(versions[?isDefaultVersion==`false`], &versionId)[0].versionId' \
+      --output text)"
+
+    if [[ -n "$oldest_non_default" && "$oldest_non_default" != "None" ]]; then
+      aws --profile "${PROFILE}" iot delete-provisioning-template-version \
+        --template-name "$template_name" \
+        --version-id "$oldest_non_default"
+    fi
+  fi
+}
+
 upsert_provisioning_template() {
   local name="$1"
   local file="$2"
 
   if aws --profile "${PROFILE}" iot describe-provisioning-template --template-name "$name" >/dev/null 2>&1; then
     echo "Updating provisioning template (new version): $name"
+    ensure_room_for_template_version "$name"
     aws --profile "${PROFILE}" iot create-provisioning-template-version \
       --template-name "$name" \
       --template-body "file://$file" \
@@ -160,14 +185,6 @@ aws iot attach-policy \
   --region "$REGION"
 
 echo "Attached policy '$PROVISIONING_POLICY_NAME' to certificate."
-
-# 3) Quick verify (optional)
-aws iot list-attached-policies \
-  --target "$CERT_ARN" \
-  --profile "$PROFILE" \
-  --region "$REGION" \
-  --output table
-
 
 echo "Done."
 echo "Policies: $CAMERA_POLICY_NAME, $PROVISIONING_POLICY_NAME"

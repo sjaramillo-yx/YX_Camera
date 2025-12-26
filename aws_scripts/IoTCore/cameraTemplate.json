@@ -20,7 +20,8 @@
         "CertificateId": {
           "Ref": "AWS::IoT::Certificate::Id"
         },
-        "Status": "Active"
+        "Status": "Active",
+        "ThingPrincipalType": "EXCLUSIVE_THING"
       }
     },
     "thing": {
