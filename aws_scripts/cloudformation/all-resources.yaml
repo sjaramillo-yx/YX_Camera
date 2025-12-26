@@ -1,0 +1,1183 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: All YX Camera infrastructure (storage, IoT, Lambda, AppSync, bootstrap user) in a single stack.
+
+Parameters:
+  TableName:
+    Type: String
+    Default: yx-cam-data
+  ApiName:
+    Type: String
+    Default: yx-cam-api
+  AuthType:
+    Type: String
+    Default: AWS_IAM
+    AllowedValues:
+      - API_KEY
+      - AWS_IAM
+      - AMAZON_COGNITO_USER_POOLS
+      - OPENID_CONNECT
+      - AWS_LAMBDA
+  LambdaMemory:
+    Type: Number
+    Default: "256"
+  LambdaTimeout:
+    Type: Number
+    Default: "10"
+  DeployBootstrapUser:
+    Type: String
+    Default: "false"
+    AllowedValues:
+      - "true"
+      - "false"
+
+Conditions:
+  UseApiKey: !Equals [!Ref AuthType, API_KEY]
+  CreateBootstrapUser: !Equals [!Ref DeployBootstrapUser, "true"]
+
+Resources:
+  CameraDataBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  CameraDataBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref CameraDataBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: EnforceTLS
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !Sub '${CameraDataBucket.Arn}'
+              - !Sub '${CameraDataBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: false
+
+  CameraDataTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Ref TableName
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+        - AttributeName: allRecordingsPk
+          AttributeType: S
+        - AttributeName: allRecordingsSk
+          AttributeType: S
+        - AttributeName: ongoingRecordingsPk
+          AttributeType: S
+        - AttributeName: ongoingRecordingsSk
+          AttributeType: S
+        - AttributeName: camerasByLastSeenPk
+          AttributeType: S
+        - AttributeName: camerasByLastSeenSk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: all-recordings
+          KeySchema:
+            - AttributeName: allRecordingsPk
+              KeyType: HASH
+            - AttributeName: allRecordingsSk
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: ongoing-recordings
+          KeySchema:
+            - AttributeName: ongoingRecordingsPk
+              KeyType: HASH
+            - AttributeName: ongoingRecordingsSk
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: cameras-by-last-seen
+          KeySchema:
+            - AttributeName: camerasByLastSeenPk
+              KeyType: HASH
+            - AttributeName: camerasByLastSeenSk
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  IotRuleDynamoRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: iot.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: DynamoWrite
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: DynamoWrite
+                Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:GetItem
+                Resource:
+                  - !GetAtt CameraDataTable.Arn
+                  - !Sub "${CameraDataTable.Arn}/index/*"
+
+  OngoingRecordingFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: DynamoUpdate
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:UpdateItem
+                  - dynamodb:PutItem
+                Resource:
+                  - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableName}
+                  - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableName}/index/*
+
+  OngoingRecordingFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Role: !GetAtt OngoingRecordingFunctionRole.Arn
+      Handler: index.lambda_handler
+      Runtime: python3.11
+      MemorySize: !Ref LambdaMemory
+      Timeout: !Ref LambdaTimeout
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref TableName
+      Code:
+        ZipFile: |
+          import os
+          import boto3
+
+          ddb = boto3.client("dynamodb")
+          TABLE = os.environ["TABLE_NAME"]
+
+          def _n(x):
+              return {"N": str(x)}
+
+          def _s(x):
+              return {"S": str(x)}
+
+          def lambda_handler(event, context):
+              pk = event["PK"]
+              sk = event["SK"]
+
+              status = event.get("status")
+              updated_at = event.get("updatedAt")
+              transaction_id = event.get("transactionId")
+
+              set_parts = []
+              remove_parts = []
+              names = {"#st": "status"}
+              values = {}
+
+              def set_attr(name, value_av):
+                  placeholder = f":{name}"
+                  set_parts.append(f"{name} = {placeholder}")
+                  values[placeholder] = value_av
+
+              if status is not None:
+                  set_parts.append("#st = :st")
+                  values[":st"] = _s(status)
+              if updated_at is not None:
+                  set_attr("updatedAt", _n(updated_at))
+              if transaction_id is not None:
+                  set_attr("transactionId", _s(transaction_id))
+
+              if event.get("allRecordingsPk") is not None:
+                  set_attr("allRecordingsPk", _s(event["allRecordingsPk"]))
+              if event.get("allRecordingsSk") is not None:
+                  set_attr("allRecordingsSk", _s(event["allRecordingsSk"]))
+
+              if event.get("ongoingRecordingsPk") is not None and event.get("ongoingRecordingsSk") is not None:
+                  set_attr("ongoingRecordingsPk", _s(event["ongoingRecordingsPk"]))
+                  set_attr("ongoingRecordingsSk", _s(event["ongoingRecordingsSk"]))
+              else:
+                  remove_parts.extend(["ongoingRecordingsPk", "ongoingRecordingsSk"])
+
+              if event.get("currentFPS") is not None:
+                  set_attr("currentFPS", _n(event["currentFPS"]))
+              if event.get("currentBitrate") is not None:
+                  set_attr("currentBitrate", _n(event["currentBitrate"]))
+              if event.get("lengthSec") is not None:
+                  set_attr("lengthSec", _n(event["lengthSec"]))
+
+              update_expr = []
+              if set_parts:
+                  update_expr.append("SET " + ", ".join(set_parts))
+              if remove_parts:
+                  update_expr.append("REMOVE " + ", ".join(remove_parts))
+
+              ddb.update_item(
+                  TableName=TABLE,
+                  Key={"PK": _s(pk), "SK": _s(sk)},
+                  UpdateExpression=" ".join(update_expr),
+                  ExpressionAttributeNames=names,
+                  ExpressionAttributeValues=values,
+              )
+
+              return {"ok": True}
+
+  CameraHelloInfoRule:
+    Type: AWS::IoT::TopicRule
+    Properties:
+      TopicRulePayload:
+        AwsIotSqlVersion: '2016-03-23'
+        RuleDisabled: false
+        Sql: |
+          SELECT
+            concat('Camera#', cast(thingName as String)) AS PK,
+            'info' AS SK,
+            firmwareVersion,
+            videoInfo.sensor.name as sensor,
+            timestamp() AS updatedAt
+          FROM 'yx/cameras/hello'
+          WHERE thingName = clientid()
+        Actions:
+          - DynamoDBv2:
+              RoleArn: !GetAtt IotRuleDynamoRole.Arn
+              PutItem:
+                TableName: !Ref TableName
+
+  CameraHelloStatusRule:
+    Type: AWS::IoT::TopicRule
+    Properties:
+      TopicRulePayload:
+        AwsIotSqlVersion: '2016-03-23'
+        RuleDisabled: false
+        Sql: |
+          SET
+              @serverTimeSec = floor(timestamp() / 1000),
+              @timeDiff = abs(@serverTimeSec - deviceTime),
+              @nowMs = timestamp(),
+              @pad = concat('0000000000000', cast(@nowMs as String)),
+              @lastSeenSortable = substring(@pad, length(@pad) - 13)
+
+          SELECT
+            concat('Camera#', thingName) AS PK,
+            'status' AS SK,
+            false AS recording,
+            @nowMs AS lastSeen,
+            @timeDiff AS driftSec,
+            sdCardInfo.present AS sdPresent,
+            CASE sdCardInfo.present WHEN true THEN sdCardInfo.sizeMB END AS sdSizeMB,
+            CASE sdCardInfo.present WHEN true THEN sdCardInfo.freeMB END AS sdFreeMB,
+            'Cameras#ALL' as camerasByLastSeenPk,
+            concat(@lastSeenSortable , '#', thingName) as camerasByLastSeenSk
+          FROM 'yx/cameras/hello'
+          WHERE thingName = clientid()
+        Actions:
+          - DynamoDBv2:
+              RoleArn: !GetAtt IotRuleDynamoRole.Arn
+              PutItem:
+                TableName: !Ref TableName
+
+  CameraCurrentStatusRule:
+    Type: AWS::IoT::TopicRule
+    Properties:
+      TopicRulePayload:
+        AwsIotSqlVersion: '2016-03-23'
+        RuleDisabled: false
+        Sql: |
+          SET
+              @serverTimeSec = floor(timestamp() / 1000),
+              @timeDiff = abs(@serverTimeSec - deviceTime),
+              @nowMs = timestamp(),
+              @pad = concat('0000000000000', cast(@nowMs as String)),
+              @lastSeenSortable = substring(@pad, length(@pad) - 13)
+
+          SELECT
+              concat('Camera#', cast(thingName as String)) AS PK,
+              'status' AS SK,
+              isRecording as recording,
+              @nowMs AS lastSeen,
+              @timeDiff AS driftSec,
+              sdCardInfo.present AS sdPresent,
+              CASE sdCardInfo.present WHEN true THEN sdCardInfo.sizeMB END AS sdSizeMB,
+              CASE sdCardInfo.present WHEN true THEN sdCardInfo.freeMB END AS sdFreeMB,
+              'Cameras#ALL' as camerasByLastSeenPk,
+              concat(@lastSeenSortable , '#', thingName) as camerasByLastSeenSk
+          FROM 'yx/cameras/status'
+          WHERE thingName = clientid()
+        Actions:
+          - DynamoDBv2:
+              RoleArn: !GetAtt IotRuleDynamoRole.Arn
+              PutItem:
+                TableName: !Ref TableName
+
+  RecordingStatusRule:
+    Type: AWS::IoT::TopicRule
+    Properties:
+      TopicRulePayload:
+        AwsIotSqlVersion: '2016-03-23'
+        RuleDisabled: false
+        Sql: |
+          SET
+            @nowMs        = timestamp(),
+            @day          = floor(@nowMs / 1000 / 86400),
+            @thing        = topic(3),
+            @transaction  = topic(4),
+            @isStart      = (status = 'STARTED'),
+            @isDone       = (status = 'DONE'),
+            @isFail       = (status = 'ERROR'),
+            @pk           = concat('Camera#', @thing)
+
+          SELECT
+            @pk AS PK,
+            concat('Rec#', @transaction) AS SK,
+            @transaction   AS transactionId,
+            status  AS status,
+            @nowMs AS updatedAt,
+            'Recs#ALL' AS allRecordingsPk,
+            concat(cast(@nowMs as String), '#', @pk, '#', @transaction) AS allRecordingsSk,
+            CASE @isStart WHEN true THEN targetBitrate END AS targetBitrate,
+            CASE @isStart WHEN true THEN targetFps     END AS targetFps,
+            CASE @isDone WHEN true THEN filename       END AS filename,
+            CASE @isDone WHEN true THEN filesize        END AS filesize,
+            CASE @isDone WHEN true THEN recordedSeconds END AS lengthSec,
+            CASE @isFail WHEN true THEN errorCode END AS errorCode,
+            CASE @isFail WHEN true THEN errorMessage END AS errorMessage,
+            CASE @isFail WHEN true THEN errorOrigin END AS failedModule,
+            CASE @isFail WHEN true THEN timestamp END AS timestamp
+          FROM 'yx/recordings/+/+/status'
+          WHERE
+              @thing = clientid() AND status <> 'ONGOING'
+        Actions:
+          - DynamoDBv2:
+              RoleArn: !GetAtt IotRuleDynamoRole.Arn
+              PutItem:
+                TableName: !Ref TableName
+
+  RecordingStatusOngoingRule:
+    Type: AWS::IoT::TopicRule
+    Properties:
+      TopicRulePayload:
+        AwsIotSqlVersion: '2016-03-23'
+        RuleDisabled: false
+        Sql: |
+          SET
+            @nowMs        = timestamp(),
+            @day          = floor(@nowMs / 1000 / 86400),
+            @thing        = topic(3),
+            @transaction  = topic(4),
+            @pk           = concat('Camera#', @thing)
+
+          SELECT
+            @pk AS PK,
+            concat('Rec#', @transaction) AS SK,
+            @transaction   AS transactionId,
+            status  AS status,
+            @nowMs AS updatedAt,
+            'Recs#ALL' AS allRecordingsPk,
+            concat(cast(@nowMs as String), '#', @pk, '#', @transaction) AS allRecordingsSk,
+            'Ongoing#ALL' AS ongoingRecordingsPk,
+            concat(cast(@nowMs as String), '#', @pk, '#', @transaction) AS ongoingRecordingsSk,
+            fps             AS currentFPS,
+            bitrate         AS currentBitrate,
+            recordedSeconds AS lengthSec
+          FROM 'yx/recordings/+/+/status'
+          WHERE
+              @thing = clientid() AND status = 'ONGOING'
+        Actions:
+          - Lambda:
+              FunctionArn: !GetAtt OngoingRecordingFunction.Arn
+
+  RecordingStatusOngoingPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt OngoingRecordingFunction.Arn
+      Principal: iot.amazonaws.com
+      SourceArn: !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:rule/RecordingStatusOngoing
+
+  GraphQLApi:
+    Type: AWS::AppSync::GraphQLApi
+    Properties:
+      Name: !Ref ApiName
+      AuthenticationType: !Ref AuthType
+
+  GraphQLSchema:
+    Type: AWS::AppSync::GraphQLSchema
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      Definition: |
+        schema {
+          query: Query
+        }
+
+        type Camera {
+          driftSec: Int
+          firmwareVersion: String
+          lastSeen: AWSTimestamp
+          online: Boolean!
+          recording: Boolean!
+          sdFreeMB: Int
+          sdPresent: Boolean
+          sdSizeMB: Int
+          sensorModel: String
+          sntpSynchronized: Boolean
+          thingName: ID!
+        }
+
+        type CameraListPage {
+          items: [Camera!]!
+          nextToken: String
+        }
+
+        type Query {
+          getCamera(thingName: ID!): Camera
+          listCameraStatuses(limit: Int, nextToken: String): CameraListPage!
+          listRecordings(limit: Int, nextToken: String): RecordingsList!
+        }
+
+        type Recording {
+          currentBitrate: Int
+          currentFPS: Int
+          errorCode: String
+          errorMessage: String
+          errorTimestamp: AWSTimestamp
+          failedModule: String
+          filename: String
+          filesize: Int
+          hres: Int
+          lengthSeconds: Int
+          status: String!
+          targetBitrate: Int
+          targetFPS: Int
+          transactionId: ID!
+          updatedAt: AWSTimestamp
+          vres: Int
+        }
+
+        type RecordingsList {
+          items: [Recording!]!
+          nextToken: String
+        }
+
+  GraphQLApiKey:
+    Type: AWS::AppSync::ApiKey
+    Condition: UseApiKey
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+
+  AppSyncDynamoRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: appsync.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: DynamoAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                  - dynamodb:BatchGetItem
+                  - dynamodb:BatchWriteItem
+                Resource:
+                  - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableName}
+                  - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableName}/*
+
+  CameraDataSource:
+    Type: AWS::AppSync::DataSource
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      Name: !Sub "${AWS::StackName}-dynamo"
+      Type: AMAZON_DYNAMODB
+      ServiceRoleArn: !GetAtt AppSyncDynamoRole.Arn
+      DynamoDBConfig:
+        TableName: !Ref TableName
+        AwsRegion: !Ref AWS::Region
+        UseCallerCredentials: false
+
+  GetCameraInfoFunction:
+    Type: AWS::AppSync::FunctionConfiguration
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      Name: !Sub "${AWS::StackName}-getCameraInfo"
+      DataSourceName: !Ref CameraDataSource
+      Runtime:
+        Name: APPSYNC_JS
+        RuntimeVersion: 1.0.0
+      Code: |
+        import { util } from "@aws-appsync/utils";
+
+        export function request(ctx) {
+          const thingName = ctx.stash.thingName;
+          return {
+            operation: "GetItem",
+            key: util.dynamodb.toMapValues({
+              PK: `Camera#${thingName}`,
+              SK: "info",
+            }),
+          };
+        }
+
+        export function response(ctx) {
+          ctx.stash.infoItem = ctx.result ?? null;
+          return ctx.result;
+        }
+
+  GetCameraStatusFunction:
+    Type: AWS::AppSync::FunctionConfiguration
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      Name: !Sub "${AWS::StackName}-getCameraStatus"
+      DataSourceName: !Ref CameraDataSource
+      Runtime:
+        Name: APPSYNC_JS
+        RuntimeVersion: 1.0.0
+      Code: |
+        import { util } from "@aws-appsync/utils";
+
+        export function request(ctx) {
+          const thingName = ctx.stash.thingName;
+          return {
+            operation: "GetItem",
+            key: util.dynamodb.toMapValues({
+              PK: `Camera#${thingName}`,
+              SK: "status",
+            }),
+          };
+        }
+
+        export function response(ctx) {
+          ctx.stash.statusItem = ctx.result ?? null;
+          return ctx.result;
+        }
+
+  GetCameraResolver:
+    Type: AWS::AppSync::Resolver
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      TypeName: Query
+      FieldName: getCamera
+      Kind: PIPELINE
+      PipelineConfig:
+        Functions:
+          - !GetAtt GetCameraInfoFunction.FunctionId
+          - !GetAtt GetCameraStatusFunction.FunctionId
+      Runtime:
+        Name: APPSYNC_JS
+        RuntimeVersion: 1.0.0
+      Code: |
+        import { util } from "@aws-appsync/utils";
+
+        export function request(ctx) {
+          ctx.stash.thingName = ctx.args.thingName;
+          return {};
+        }
+
+        export function response(ctx) {
+          const nowMs = util.time.nowEpochMilliSeconds();
+          const argThingName = ctx.stash.thingName;
+
+          const status = ctx.stash.statusItem || null;
+          const info = ctx.stash.infoItem || null;
+
+          if (!status && !info) return null;
+
+          const merged = { ...(info ?? {}), ...(status ?? {}) };
+
+          let derivedThingName = merged.thingName;
+
+          if (!derivedThingName) {
+            const pk = merged.PK || status?.PK || info?.PK;
+            if (typeof pk === "string" && pk.startsWith("Camera#")) {
+              derivedThingName = pk.slice("Camera#".length);
+            }
+          }
+
+          const thingName = derivedThingName ?? argThingName;
+          const online = merged.lastSeen != null ? (nowMs - merged.lastSeen) <= 30_000 : false;
+          const sntpSynchronized = merged.driftSec < 31;
+
+          return {
+            thingName,
+            online,
+            recording: merged.recording ?? false,
+            lastSeen: merged.lastSeen,
+            driftSec: merged.driftSec,
+            sntpSynchronized,
+            sdPresent: merged.sdPresent,
+            sdSizeMB: merged.sdSizeMB,
+            sdFreeMB: merged.sdFreeMB,
+            firmwareVersion: merged.firmwareVersion,
+            sensorModel: merged.sensorModel,
+          };
+        }
+
+  ListCameraStatusesResolver:
+    Type: AWS::AppSync::Resolver
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      TypeName: Query
+      FieldName: listCameraStatuses
+      DataSourceName: !Ref CameraDataSource
+      Kind: UNIT
+      Runtime:
+        Name: APPSYNC_JS
+        RuntimeVersion: 1.0.0
+      Code: |
+        import { util } from "@aws-appsync/utils";
+
+        export function request(ctx) {
+          const args = ctx.args ?? ctx.arguments ?? {};
+          const limit = args.limit ?? 50;
+          const nextToken = args.nextToken;
+
+          return {
+            operation: "Query",
+            index: "all-cameras",
+            query: {
+              expression: "#pk = :pk",
+              expressionNames: { "#pk": "camerasByLastSeenPk" },
+              expressionValues: util.dynamodb.toMapValues({ ":pk": "Cameras#ALL" }),
+            },
+            limit,
+            nextToken,
+            scanIndexForward: false,
+          };
+        }
+
+        export function response(ctx) {
+          const { items = [], nextToken = null } = ctx.result ?? {};
+
+          const nowMs = util.time.nowEpochMilliSeconds();
+
+          const mapped = items.map((it) => {
+            let thingName = it.thingName;
+            if (!thingName && typeof it.camerasByLastSeenSk === "string") {
+              const i = it.camerasByLastSeenSk.indexOf("#");
+              if (i >= 0) thingName = it.camerasByLastSeenSk.slice(i + 1);
+            }
+            if (!thingName && typeof it.PK === "string" && it.PK.startsWith("Camera#")) {
+              thingName = it.PK.slice("Camera#".length);
+            }
+            const online = it.lastSeen != null ? (nowMs - it.lastSeen) <= 30_000 : false;
+            const sntpSynchronized = it.driftSec < 31;
+
+            return {
+              thingName,
+              online,
+              recording: it.recording ?? false,
+              lastSeen: it.lastSeen,
+              driftSec: it.driftSec,
+              sntpSynchronized,
+              sdPresent: it.sdPresent,
+              sdSizeMB: it.sdSizeMB,
+              sdFreeMB: it.sdFreeMB
+            };
+          });
+
+          return { items: mapped, nextToken };
+        }
+
+  ListRecordingsResolver:
+    Type: AWS::AppSync::Resolver
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      TypeName: Query
+      FieldName: listRecordings
+      DataSourceName: !Ref CameraDataSource
+      Kind: UNIT
+      Runtime:
+        Name: APPSYNC_JS
+        RuntimeVersion: 1.0.0
+      Code: |
+        import { util } from "@aws-appsync/utils";
+
+        export function request(ctx) {
+          const args = ctx.args ?? ctx.arguments ?? {};
+          const limit = args.limit ?? 50;
+          const nextToken = args.nextToken;
+
+          return {
+            operation: "Query",
+            index: "all-recordings",
+            query: {
+              expression: "#pk = :pk",
+              expressionNames: { "#pk": "allRecordingsPk" },
+              expressionValues: util.dynamodb.toMapValues({ ":pk": "Recs#ALL" }),
+            },
+            limit,
+            nextToken,
+            scanIndexForward: false,
+          };
+        }
+
+        export function response(ctx) {
+          const { items = [], nextToken = null } = ctx.result ?? {};
+
+          const mapped = items.map((it) => ({
+            transactionId: it.transactionId,
+            status: it.status ?? "UNKNOWN",
+            hres: it.hres,
+            vres: it.vres,
+            targetFPS: it.targetFps,
+            targetBitrate: it.targetBitrate,
+            currentFPS: it.currentFPS,
+            currentBitrate: it.currentBitrate,
+            lengthSeconds: it.lengthSeconds ?? it.duration ?? it.recordedSeconds ?? it.lengthSec,
+            filename: it.filename,
+            filesize: it.filesize,
+            updatedAt: it.updatedAt,
+            errorCode: it.errorCode,
+            errorMessage: it.errorMessage,
+            failedModule: it.failedModule,
+            errorTimestamp: it.errorTimestamp,
+          }));
+
+          return { items: mapped, nextToken };
+        }
+
+  CameraPolicy:
+    Type: AWS::IoT::Policy
+    Properties:
+      PolicyName: !Sub "${AWS::StackName}-camera-policy"
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: iot:Connect
+            Resource: '*'
+          - Effect: Allow
+            Action: iot:Publish
+            Resource: arn:aws:iot:*:*:topic/yx/cameras/hello
+          - Effect: Allow
+            Action: iot:Publish
+            Resource: arn:aws:iot:*:*:topic/yx/cameras/status
+          - Effect: Allow
+            Action: iot:Subscribe
+            Resource: arn:aws:iot:::topicfilter/$aws/things/${iot:Connection.Thing.ThingName}/*
+          - Effect: Allow
+            Action: iot:Receive
+            Resource: arn:aws:iot:::topic/$aws/things/${iot:Connection.Thing.ThingName}/*
+          - Effect: Allow
+            Action: iot:Publish
+            Resource: arn:aws:iot:::topic/$aws/things/${iot:Connection.Thing.ThingName}/*
+          - Effect: Allow
+            Action: iot:Subscribe
+            Resource: arn:aws:iot:*:*:topicfilter/yx/recordings/${iot:Connection.Thing.ThingName}/*
+          - Effect: Allow
+            Action: iot:Receive
+            Resource: arn:aws:iot:*:*:topic/yx/recordings/${iot:Connection.Thing.ThingName}/*
+          - Effect: Allow
+            Action: iot:Publish
+            Resource: arn:aws:iot:*:*:topic/yx/recordings/${iot:Connection.Thing.ThingName}/*
+
+  ProvisioningPolicy:
+    Type: AWS::IoT::Policy
+    Properties:
+      PolicyName: !Sub "${AWS::StackName}-provisioning-policy"
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Action: iot:Connect
+            Resource: '*'
+          - Effect: Allow
+            Action:
+              - iot:Publish
+              - iot:Receive
+            Resource:
+              - arn:aws:iot:*:*:topic/$aws/certificates/create/json
+              - arn:aws:iot:*:*:topic/$aws/certificates/create/json/accepted
+              - arn:aws:iot:*:*:topic/$aws/certificates/create/json/rejected
+              - !Sub arn:aws:iot:*:*:topic/$aws/provisioning-templates/${ProvisioningTemplate}/provision/json
+              - !Sub arn:aws:iot:*:*:topic/$aws/provisioning-templates/${ProvisioningTemplate}/provision/json/accepted
+              - !Sub arn:aws:iot:*:*:topic/$aws/provisioning-templates/${ProvisioningTemplate}/provision/json/rejected
+          - Effect: Allow
+            Action: iot:Subscribe
+            Resource:
+              - arn:aws:iot:*:*:topicfilter/$aws/certificates/create/json/accepted
+              - arn:aws:iot:*:*:topicfilter/$aws/certificates/create/json/rejected
+              - !Sub arn:aws:iot:*:*:topicfilter/$aws/provisioning-templates/${ProvisioningTemplate}/provision/json/accepted
+              - !Sub arn:aws:iot:*:*:topicfilter/$aws/provisioning-templates/${ProvisioningTemplate}/provision/json/rejected
+
+  ProvisioningRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: iot.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSIoTThingsRegistration
+
+  ProvisioningTemplate:
+    Type: AWS::IoT::ProvisioningTemplate
+    Properties:
+      Enabled: true
+      TemplateName: !Sub "${AWS::StackName}-provisioning-template"
+      ProvisioningRoleArn: !GetAtt ProvisioningRole.Arn
+      TemplateBody: !Sub |
+        {
+          "Parameters": {
+            "SerialNumber": {
+              "Type": "String"
+            },
+            "AWS::IoT::Certificate::Id": {
+              "Type": "String"
+            }
+          },
+          "Resources": {
+            "policy_camera": {
+              "Type": "AWS::IoT::Policy",
+              "Properties": {
+                "PolicyName": "${CameraPolicy}"
+              }
+            },
+            "certificate": {
+              "Type": "AWS::IoT::Certificate",
+              "Properties": {
+                "CertificateId": {
+                  "Ref": "AWS::IoT::Certificate::Id"
+                },
+                "Status": "Active",
+                "ThingPrincipalType": "EXCLUSIVE_THING"
+              }
+            },
+            "thing": {
+              "Type": "AWS::IoT::Thing",
+              "OverrideSettings": {
+                "AttributePayload": "MERGE",
+                "ThingGroups": "DO_NOTHING",
+                "ThingTypeName": "REPLACE"
+              },
+              "Properties": {
+                "AttributePayload": {},
+                "ThingGroups": [],
+                "ThingName": {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "VueltaCam_",
+                      {
+                        "Ref": "SerialNumber"
+                      }
+                    ]
+                  ]
+                }
+              }
+            }
+          }
+        }
+
+  BootstrapUser:
+    Type: AWS::IAM::User
+    Condition: CreateBootstrapUser
+
+  BootstrapPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Condition: CreateBootstrapUser
+    Properties:
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: CreateIoTCertificates
+            Effect: Allow
+            Action: iot:CreateKeysAndCertificate
+            Resource: "*"
+          - Sid: AttachIoTPoliciesToCertificates
+            Effect: Allow
+            Action:
+              - iot:AttachPolicy
+              - iot:ListAttachedPolicies
+            Resource: arn:aws:iot:*:*:cert/*
+          - Sid: StsWhoAmI
+            Effect: Allow
+            Action: sts:GetCallerIdentity
+            Resource: "*"
+          - Sid: ManageIoTPolicies
+            Effect: Allow
+            Action:
+              - iot:GetPolicy
+              - iot:CreatePolicy
+              - iot:ListPolicyVersions
+              - iot:CreatePolicyVersion
+              - iot:DeletePolicyVersion
+            Resource:
+              - arn:aws:iot:*:*:policy/*
+              - arn:aws:iot:*:*:policy/*
+          - Sid: ManageProvisioningTemplate
+            Effect: Allow
+            Action:
+              - iot:DescribeProvisioningTemplate
+              - iot:DeleteProvisioningTemplateVersion
+              - iot:ListProvisioningTemplateVersions
+              - iot:CreateProvisioningTemplate
+              - iot:CreateProvisioningTemplateVersion
+            Resource: arn:aws:iot:*:*:provisioningtemplate/*
+          - Sid: PassProvisioningRoleToIoT
+            Effect: Allow
+            Action: iam:PassRole
+            Resource: arn:aws:iam::*:role/*
+            Condition:
+              StringEquals:
+                iam:PassedToService: iot.amazonaws.com
+          - Sid: CreateSpecificBucketOnly
+            Effect: Allow
+            Action: s3:CreateBucket
+            Resource: arn:aws:s3:::*
+          - Sid: EnableVersioningOnGeneratedBuckets
+            Effect: Allow
+            Action: s3:PutBucketVersioning
+            Resource: arn:aws:s3:::*
+          - Sid: PutOnlyInApprovedPrefixes
+            Effect: Allow
+            Action: s3:PutObject
+            Resource:
+              - arn:aws:s3:::*/videos/*
+              - arn:aws:s3:::*/logs/*
+              - arn:aws:s3:::*/firmware/*
+              - arn:aws:s3:::*/videos/
+              - arn:aws:s3:::*/logs/
+              - arn:aws:s3:::*/firmware/
+          - Sid: ManageProvisioningRole
+            Effect: Allow
+            Action:
+              - iam:GetRole
+              - iam:CreateRole
+              - iam:UpdateAssumeRolePolicy
+              - iam:AttachRolePolicy
+              - iam:ListAttachedRolePolicies
+            Resource: arn:aws:iam::*:role/*
+          - Sid: AllowAttachingAWSIoTThingsRegistration
+            Effect: Allow
+            Action: iam:AttachRolePolicy
+            Resource: arn:aws:iam::*:role/*
+            Condition:
+              ArnEquals:
+                iam:PolicyARN: arn:aws:iam::aws:policy/service-role/AWSIoTThingsRegistration
+          - Sid: DynamoBootstrapCreateAndIndexes
+            Effect: Allow
+            Action:
+              - dynamodb:CreateTable
+              - dynamodb:UpdateTable
+              - dynamodb:DescribeTable
+              - dynamodb:TagResource
+              - dynamodb:UntagResource
+            Resource: arn:aws:dynamodb:*:*:table/*
+          - Sid: ManageIoTTopicRules
+            Effect: Allow
+            Action:
+              - iot:CreateTopicRule
+              - iot:ReplaceTopicRule
+              - iot:DeleteTopicRule
+              - iot:GetTopicRule
+              - iot:ListTopicRules
+              - iot:EnableTopicRule
+              - iot:DisableTopicRule
+              - iot:TagResource
+              - iot:UntagResource
+              - iot:ListTagsForResource
+            Resource: arn:aws:iot:*:*:rule/*
+          - Sid: ManageDynamoRole
+            Effect: Allow
+            Action:
+              - iam:GetRole
+              - iam:CreateRole
+              - iam:UpdateAssumeRolePolicy
+              - iam:AttachRolePolicy
+              - iam:ListAttachedRolePolicies
+            Resource: arn:aws:iam::*:role/*
+          - Sid: PassIoTRuleActionRole
+            Effect: Allow
+            Action: iam:PassRole
+            Resource: arn:aws:iam::*:role/*
+            Condition:
+              StringEquals:
+                iam:PassedToService: iot.amazonaws.com
+          - Sid: LambdaDeploy
+            Effect: Allow
+            Action:
+              - lambda:CreateFunction
+              - lambda:UpdateFunctionCode
+              - lambda:UpdateFunctionConfiguration
+              - lambda:GetFunction
+              - lambda:GetFunctionConfiguration
+            Resource: arn:aws:lambda:*:*:function:*
+          - Sid: ManageLambdaInvokePermissionForIoTRules
+            Effect: Allow
+            Action:
+              - lambda:AddPermission
+              - lambda:RemovePermission
+              - lambda:GetPolicy
+            Resource: arn:aws:lambda:*:*:function:*
+          - Sid: ManageLambdaRoles
+            Effect: Allow
+            Action:
+              - iam:GetRole
+              - iam:CreateRole
+              - iam:UpdateAssumeRolePolicy
+              - iam:AttachRolePolicy
+              - iam:PutRolePolicy
+              - iam:ListAttachedRolePolicies
+            Resource: arn:aws:iam::*:role/*-exec
+          - Sid: AllowPassExecRoleToLambdaOnly
+            Effect: Allow
+            Action: iam:PassRole
+            Resource: arn:aws:iam::*:role/*-exec
+            Condition:
+              StringEquals:
+                iam:PassedToService: lambda.amazonaws.com
+          - Sid: AppSyncDeploy
+            Effect: Allow
+            Action:
+              - appsync:CreateGraphqlApi
+              - appsync:UpdateGraphqlApi
+              - appsync:GetGraphqlApi
+              - appsync:ListGraphqlApis
+              - appsync:StartSchemaCreation
+              - appsync:GetSchemaCreationStatus
+              - appsync:CreateDataSource
+              - appsync:UpdateDataSource
+              - appsync:GetDataSource
+              - appsync:ListDataSources
+              - appsync:CreateResolver
+              - appsync:UpdateResolver
+              - appsync:GetResolver
+              - appsync:ListResolvers
+              - appsync:CreateFunction
+              - appsync:UpdateFunction
+              - appsync:GetFunction
+              - appsync:ListFunctions
+              - appsync:TagResource
+              - appsync:UntagResource
+              - appsync:ListTagsForResource
+            Resource: "*"
+          - Sid: CreateAppSyncServiceLinkedRoleIfNeeded
+            Effect: Allow
+            Action: iam:CreateServiceLinkedRole
+            Resource: "*"
+            Condition:
+              StringEquals:
+                iam:AWSServiceName: appsync.amazonaws.com
+          - Sid: ManageAppSyncDatasourceRoles
+            Effect: Allow
+            Action:
+              - iam:CreateRole
+              - iam:GetRole
+              - iam:UpdateAssumeRolePolicy
+              - iam:PutRolePolicy
+              - iam:AttachRolePolicy
+            Resource: arn:aws:iam::*:role/appsync-*
+          - Sid: PassDatasourceRoleToAppSyncOnly
+            Effect: Allow
+            Action: iam:PassRole
+            Resource: arn:aws:iam::*:role/appsync-*
+            Condition:
+              StringEquals:
+                iam:PassedToService: appsync.amazonaws.com
+      Users:
+        - !Ref BootstrapUser
+
+  BootstrapAccessKey:
+    Type: AWS::IAM::AccessKey
+    Condition: CreateBootstrapUser
+    Properties:
+      UserName: !Ref BootstrapUser
+
+Outputs:
+  BucketName:
+    Value: !Ref CameraDataBucket
+    Description: Name of the S3 bucket storing firmware, logs, and videos.
+  TableName:
+    Value: !Ref CameraDataTable
+    Description: DynamoDB table name for camera data.
+  TableArn:
+    Value: !GetAtt CameraDataTable.Arn
+    Description: ARN of the DynamoDB table.
+  IotRuleRoleArn:
+    Value: !GetAtt IotRuleDynamoRole.Arn
+    Description: Role ARN IoT Rules should assume when writing to DynamoDB.
+  LambdaArn:
+    Value: !GetAtt OngoingRecordingFunction.Arn
+  HelloInfoRuleArn:
+    Value: !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:rule/${CameraHelloInfoRule}
+  HelloStatusRuleArn:
+    Value: !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:rule/${CameraHelloStatusRule}
+  CurrentStatusRuleArn:
+    Value: !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:rule/${CameraCurrentStatusRule}
+  RecordingStatusRuleArn:
+    Value: !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:rule/${RecordingStatusRule}
+  RecordingStatusOngoingRuleArn:
+    Value: !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:rule/${RecordingStatusOngoingRule}
+  GraphQlApiId:
+    Value: !GetAtt GraphQLApi.ApiId
+  GraphQlApiUrl:
+    Value: !GetAtt GraphQLApi.GraphQLUrl
+  DataSourceName:
+    Value: !Ref CameraDataSource
+  DatasourceRoleArn:
+    Value: !GetAtt AppSyncDynamoRole.Arn
+  ProvisioningRoleArn:
+    Value: !GetAtt ProvisioningRole.Arn
+  ProvisioningTemplateName:
+    Value: !Ref ProvisioningTemplate
+  CameraPolicyName:
+    Value: !Ref CameraPolicy
+  ProvisioningPolicyName:
+    Value: !Ref ProvisioningPolicy
+  BootstrapUserName:
+    Condition: CreateBootstrapUser
+    Value: !Ref BootstrapUser
+  BootstrapPolicyArn:
+    Condition: CreateBootstrapUser
+    Value: !Ref BootstrapPolicy
+  AccessKeyId:
+    Condition: CreateBootstrapUser
+    Value: !Ref BootstrapAccessKey
+  SecretAccessKey:
+    Condition: CreateBootstrapUser
+    Value: !GetAtt BootstrapAccessKey.SecretAccessKey
+    Description: Copy this value safely; it is shown only at stack creation time.
