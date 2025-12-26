@@ -4,25 +4,19 @@ Description: Lambda and IoT Topic Rules that write camera status/recordings into
 Parameters:
   TableName:
     Type: String
-    Default: yx-cam-data
   IotRuleRoleArn:
     Type: String
     Description: ARN of the role IoT rules assume for DynamoDB actions.
-  LambdaName:
-    Type: String
-    Default: UpdateOngoingRecording
   LambdaMemory:
     Type: Number
-    Default: 256
+    Default: "256"
   LambdaTimeout:
     Type: Number
-    Default: 10
-
+    Default: "10"
 Resources:
   OngoingRecordingFunctionRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "${LambdaName}-exec"
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -48,7 +42,6 @@ Resources:
   OngoingRecordingFunction:
     Type: AWS::Lambda::Function
     Properties:
-      FunctionName: !Ref LambdaName
       Role: !GetAtt OngoingRecordingFunctionRole.Arn
       Handler: index.lambda_handler
       Runtime: python3.11
@@ -134,7 +127,6 @@ Resources:
   CameraHelloInfoRule:
     Type: AWS::IoT::TopicRule
     Properties:
-      RuleName: CameraHelloInfo
       TopicRulePayload:
         AwsIotSqlVersion: '2016-03-23'
         RuleDisabled: false
@@ -156,7 +148,6 @@ Resources:
   CameraHelloStatusRule:
     Type: AWS::IoT::TopicRule
     Properties:
-      RuleName: CameraHelloStatus
       TopicRulePayload:
         AwsIotSqlVersion: '2016-03-23'
         RuleDisabled: false
@@ -190,7 +181,6 @@ Resources:
   CameraCurrentStatusRule:
     Type: AWS::IoT::TopicRule
     Properties:
-      RuleName: CameraCurrentStatus
       TopicRulePayload:
         AwsIotSqlVersion: '2016-03-23'
         RuleDisabled: false
@@ -224,7 +214,6 @@ Resources:
   RecordingStatusRule:
     Type: AWS::IoT::TopicRule
     Properties:
-      RuleName: RecordingStatus
       TopicRulePayload:
         AwsIotSqlVersion: '2016-03-23'
         RuleDisabled: false
@@ -268,7 +257,6 @@ Resources:
   RecordingStatusOngoingRule:
     Type: AWS::IoT::TopicRule
     Properties:
-      RuleName: RecordingStatusOngoing
       TopicRulePayload:
         AwsIotSqlVersion: '2016-03-23'
         RuleDisabled: false

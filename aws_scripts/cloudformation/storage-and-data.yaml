@@ -1,25 +1,10 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: Core storage for YX Camera (S3 bucket, DynamoDB table, and IoT rule role)
 
-Parameters:
-  BucketName:
-    Type: String
-    Default: !Sub "yx-${AWS::AccountId}-cam-data"
-    Description: S3 bucket used for firmware, video, and logs.
-  TableName:
-    Type: String
-    Default: yx-cam-data
-    Description: DynamoDB table for camera metadata and recordings.
-  IotRuleRoleName:
-    Type: String
-    Default: !Sub "iot-rule-dynamo-${TableName}"
-    Description: IAM role used by IoT Rules to write into the table.
-
 Resources:
   CameraDataBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Ref BucketName
       VersioningConfiguration:
         Status: Enabled
       PublicAccessBlockConfiguration:
@@ -49,8 +34,7 @@ Resources:
   CameraDataTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: !Ref TableName
-      BillingMode: PAYPERREQUEST
+      BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - AttributeName: PK
           AttributeType: S
@@ -102,7 +86,6 @@ Resources:
   IotRuleDynamoRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Ref IotRuleRoleName
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -122,8 +105,8 @@ Resources:
                   - dynamodb:UpdateItem
                   - dynamodb:GetItem
                 Resource:
-                  - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableName}
-                  - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableName}/index/*
+                  - !GetAtt CameraDataTable.Arn
+                  - !Sub "${CameraDataTable.Arn}/index/*"
 
 Outputs:
   BucketName:

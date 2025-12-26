@@ -1,25 +1,11 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: IoT Core fleet provisioning setup for YX Camera devices.
 
-Parameters:
-  CameraPolicyName:
-    Type: String
-    Default: cameraPolicy
-  ProvisioningPolicyName:
-    Type: String
-    Default: provisioningPolicy
-  ProvisioningTemplateName:
-    Type: String
-    Default: cameraTemplate
-  ProvisioningRoleName:
-    Type: String
-    Default: yx-IoTProvisioningRole
-
 Resources:
   CameraPolicy:
     Type: AWS::IoT::Policy
     Properties:
-      PolicyName: !Ref CameraPolicyName
+      PolicyName: !Sub "${AWS::StackName}-camera-policy"
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -54,7 +40,7 @@ Resources:
   ProvisioningPolicy:
     Type: AWS::IoT::Policy
     Properties:
-      PolicyName: !Ref ProvisioningPolicyName
+      PolicyName: !Sub "${AWS::StackName}-provisioning-policy"
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -69,21 +55,20 @@ Resources:
               - arn:aws:iot:*:*:topic/$aws/certificates/create/json
               - arn:aws:iot:*:*:topic/$aws/certificates/create/json/accepted
               - arn:aws:iot:*:*:topic/$aws/certificates/create/json/rejected
-              - !Sub arn:aws:iot:*:*:topic/$aws/provisioning-templates/${ProvisioningTemplateName}/provision/json
-              - !Sub arn:aws:iot:*:*:topic/$aws/provisioning-templates/${ProvisioningTemplateName}/provision/json/accepted
-              - !Sub arn:aws:iot:*:*:topic/$aws/provisioning-templates/${ProvisioningTemplateName}/provision/json/rejected
+              - !Sub arn:aws:iot:*:*:topic/$aws/provisioning-templates/${ProvisioningTemplate}/provision/json
+              - !Sub arn:aws:iot:*:*:topic/$aws/provisioning-templates/${ProvisioningTemplate}/provision/json/accepted
+              - !Sub arn:aws:iot:*:*:topic/$aws/provisioning-templates/${ProvisioningTemplate}/provision/json/rejected
           - Effect: Allow
             Action: iot:Subscribe
             Resource:
               - arn:aws:iot:*:*:topicfilter/$aws/certificates/create/json/accepted
               - arn:aws:iot:*:*:topicfilter/$aws/certificates/create/json/rejected
-              - !Sub arn:aws:iot:*:*:topicfilter/$aws/provisioning-templates/${ProvisioningTemplateName}/provision/json/accepted
-              - !Sub arn:aws:iot:*:*:topicfilter/$aws/provisioning-templates/${ProvisioningTemplateName}/provision/json/rejected
+              - !Sub arn:aws:iot:*:*:topicfilter/$aws/provisioning-templates/${ProvisioningTemplate}/provision/json/accepted
+              - !Sub arn:aws:iot:*:*:topicfilter/$aws/provisioning-templates/${ProvisioningTemplate}/provision/json/rejected
 
   ProvisioningRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Ref ProvisioningRoleName
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -98,7 +83,7 @@ Resources:
     Type: AWS::IoT::ProvisioningTemplate
     Properties:
       Enabled: true
-      TemplateName: !Ref ProvisioningTemplateName
+      TemplateName: !Sub "${AWS::StackName}-provisioning-template"
       ProvisioningRoleArn: !GetAtt ProvisioningRole.Arn
       TemplateBody: !Sub |
         {
@@ -111,10 +96,10 @@ Resources:
             }
           },
           "Resources": {
-            "policy_cameraPolicy": {
+            "policy_camera": {
               "Type": "AWS::IoT::Policy",
               "Properties": {
-                "PolicyName": "${CameraPolicyName}"
+                "PolicyName": "${CameraPolicy}"
               }
             },
             "certificate": {
@@ -158,7 +143,7 @@ Outputs:
     Value: !GetAtt ProvisioningRole.Arn
   ProvisioningTemplateName:
     Value: !Ref ProvisioningTemplate
-  CameraPolicyName:
+  CameraPolicy:
     Value: !Ref CameraPolicy
   ProvisioningPolicyName:
     Value: !Ref ProvisioningPolicy

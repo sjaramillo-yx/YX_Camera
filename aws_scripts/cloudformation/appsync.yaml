@@ -2,12 +2,8 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: AppSync API for camera status and recordings powered by DynamoDB.
 
 Parameters:
-  ApiName:
-    Type: String
-    Default: yx-cam-api
   TableName:
     Type: String
-    Default: yx-cam-data
   AuthType:
     Type: String
     Default: AWS_IAM
@@ -24,7 +20,7 @@ Resources:
   GraphQLApi:
     Type: AWS::AppSync::GraphQLApi
     Properties:
-      Name: !Ref ApiName
+      Name: !Sub "${AWS::StackName}"
       AuthenticationType: !Ref AuthType
 
   GraphQLSchema:
@@ -94,7 +90,6 @@ Resources:
   AppSyncDynamoRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "appsync-${ApiName}-dynamo"
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -125,7 +120,7 @@ Resources:
     Type: AWS::AppSync::DataSource
     Properties:
       ApiId: !GetAtt GraphQLApi.ApiId
-      Name: Dynamo
+      Name: !Sub "${AWS::StackName}-dynamo"
       Type: AMAZON_DYNAMODB
       ServiceRoleArn: !GetAtt AppSyncDynamoRole.Arn
       DynamoDBConfig:
@@ -137,7 +132,7 @@ Resources:
     Type: AWS::AppSync::FunctionConfiguration
     Properties:
       ApiId: !GetAtt GraphQLApi.ApiId
-      Name: getCameraInfo
+      Name: !Sub "${AWS::StackName}-getCameraInfo"
       DataSourceName: !Ref CameraDataSource
       Runtime:
         Name: APPSYNC_JS
@@ -165,7 +160,7 @@ Resources:
     Type: AWS::AppSync::FunctionConfiguration
     Properties:
       ApiId: !GetAtt GraphQLApi.ApiId
-      Name: getCameraStatus
+      Name: !Sub "${AWS::StackName}-getCameraStatus"
       DataSourceName: !Ref CameraDataSource
       Runtime:
         Name: APPSYNC_JS
