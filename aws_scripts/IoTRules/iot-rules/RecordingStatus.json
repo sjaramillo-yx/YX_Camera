@@ -1,0 +1,20 @@
+{
+    "rule": {
+        "ruleName": "RecordingStatus",
+        "sql": "SET\n  @nowMs        = timestamp(),\n  @day          = floor(@nowMs / 1000 / 86400),\n  @thing        = topic(3),\n  @transaction  = topic(4),\n  @isStart      = (status = 'STARTED'),\n  @isDone       = (status = 'DONE'),\n  @isFail       = (status = 'ERROR'),\n  @pk           = concat('Camera#', @thing)\n\nSELECT\n  @pk AS PK,\n  concat('Rec#', @transaction) AS SK,\n\n  @transaction   AS transactionId,\n  status  AS status,\n  @nowMs AS updatedAt,\n\n  'Recs#ALL' AS allRecordingsPk,\n  concat(cast(@nowMs as String), '#', @pk, '#', @transaction) AS allRecordingsSk,\n\n  CASE @isStart WHEN true THEN targetBitrate END AS targetBitrate,\n  CASE @isStart WHEN true THEN targetFps     END AS targetFps,\n  \n  CASE @isDone WHEN true THEN filename        END AS filename,\n  CASE @isDone WHEN true THEN filesize        END AS filesize,\n  CASE @isDone WHEN true THEN recordedSeconds END AS lengthSec,\n  \n  CASE @isFail WHEN true THEN errorCode END AS errorCode,\n  CASE @isFail WHEN true THEN errorMessage END AS errorMessage,\n  CASE @isFail WHEN true THEN errorOrigin END AS failedModule,\n  CASE @isFail WHEN true THEN timestamp END AS timestamp\n\nFROM 'yx/recordings/+/+/status'\nWHERE\n    @thing = clientid() AND status <> 'ONGOING'",
+        "description": "Extracts the recording status from messages published by the camera",
+        "createdAt": "2025-12-18T14:13:06-03:00",
+        "actions": [
+            {
+                "dynamoDBv2": {
+                    "roleArn": "ENV:DYNAMO_ROLE_ARN",
+                    "putItem": {
+                        "tableName": "ENV:DYNAMO_TABLE_NAME"
+                    }
+                }
+            }
+        ],
+        "ruleDisabled": false,
+        "awsIotSqlVersion": "2016-03-23"
+    }
+}

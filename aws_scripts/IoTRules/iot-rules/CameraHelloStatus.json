@@ -1,0 +1,20 @@
+{
+    "rule": {
+        "ruleName": "CameraHelloStatus",
+        "sql": "SET \n    @serverTimeSec = floor(timestamp() / 1000),\n    @timeDiff = abs(@serverTimeSec - deviceTime),\n    @nowMs = timestamp(),\n    @pad = concat('0000000000000', cast(@nowMs as String)),\n    @lastSeenSortable = substring(@pad, length(@pad) - 13)\n\nSELECT\n  concat('Camera#', thingName) AS PK,\n  'status' AS SK,\n  \n  false AS recording,\n  \n  @nowMs AS lastSeen,\n  @timeDiff AS driftSec,\n  \n  sdCardInfo.present AS sdPresent,\n  \n  CASE sdCardInfo.present\n    WHEN true THEN sdCardInfo.sizeMB\n  END AS sdSizeMB,\n\n  CASE sdCardInfo.present\n    WHEN true THEN sdCardInfo.freeMB\n  END AS sdFreeMB\n  \n  'Cameras#ALL' as camerasByLastSeenPk,\n  concat(@lastSeenSortable , '#', thingName) as camerasByLastSeenSk\n\nFROM 'yx/cameras/hello'\nWHERE thingName = clientid()\n",
+        "description": "Populate the status item for a camera when receiving the hello message",
+        "createdAt": "2025-12-17T17:57:26-03:00",
+        "actions": [
+            {
+                "dynamoDBv2": {
+                    "roleArn": "ENV:DYNAMO_ROLE_ARN",
+                    "putItem": {
+                        "tableName": "ENV:DYNAMO_TABLE_NAME"
+                    }
+                }
+            }
+        ],
+        "ruleDisabled": false,
+        "awsIotSqlVersion": "2016-03-23"
+    }
+}

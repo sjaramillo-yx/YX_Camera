@@ -1,0 +1,20 @@
+{
+    "rule": {
+        "ruleName": "CameraCurrentStatus",
+        "sql": "SET \n    @serverTimeSec = floor(timestamp() / 1000),\n    @timeDiff = abs(@serverTimeSec - deviceTime),\n    @nowMs = timestamp(),\n    @pad = concat('0000000000000', cast(@nowMs as String)),\n    @lastSeenSortable = substring(@pad, length(@pad) - 13)\n\nSELECT \n    concat('Camera#', cast(thingName as String)) AS PK, \n    'status' AS SK, \n    isRecording as recording, \n    @nowMs AS lastSeen,\n    @timeDiff AS driftSec,\n  \n    sdCardInfo.present AS sdPresent,\n  \n    CASE sdCardInfo.present\n        WHEN true THEN sdCardInfo.sizeMB\n    END AS sdSizeMB,\n\n    CASE sdCardInfo.present\n        WHEN true THEN sdCardInfo.freeMB\n    END AS sdFreeMB\n  \n    'Cameras#ALL' as camerasByLastSeenPk,\n    concat(@lastSeenSortable , '#', thingName) as camerasByLastSeenSk\n\nFROM 'yx/cameras/status' \nWHERE thingName = clientid() ",
+        "description": "Extract information about the current camera status from periodic messages",
+        "createdAt": "2025-12-17T18:25:25-03:00",
+        "actions": [
+            {
+                "dynamoDBv2": {
+                    "roleArn": "ENV:DYNAMO_ROLE_ARN",
+                    "putItem": {
+                        "tableName": "ENV:DYNAMO_TABLE_NAME"
+                    }
+                }
+            }
+        ],
+        "ruleDisabled": false,
+        "awsIotSqlVersion": "2016-03-23"
+    }
+}

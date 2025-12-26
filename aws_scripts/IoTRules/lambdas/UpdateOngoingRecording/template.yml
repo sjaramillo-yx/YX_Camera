@@ -1,0 +1,87 @@
+# This AWS SAM template has been generated from your function's configuration. If
+# your function has one or more triggers, note that the AWS resources associated
+# with these triggers aren't fully specified in this template and include
+# placeholder values. Open this template in AWS Infrastructure Composer or your
+# favorite IDE and modify it to specify a serverless application with other AWS
+# resources.
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: An AWS Serverless Application Model template describing your function.
+Resources:
+  UpdateOngoingRecording:
+    Type: AWS::Serverless::Function
+    Properties:
+      CodeUri: ./src
+      Description: ''
+      MemorySize: 128
+      Timeout: 3
+      Handler: lambda_function.lambda_handler
+      Runtime: python3.14
+      Architectures:
+        - x86_64
+      EphemeralStorage:
+        Size: 512
+      Environment:
+        Variables:
+          TABLE_NAME: ENV:DYNAMO_TABLE_NAME
+      EventInvokeConfig:
+        MaximumEventAgeInSeconds: 21600
+        MaximumRetryAttempts: 2
+      PackageType: Zip
+      Policies:
+        - Statement:
+            - Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+              Resource: arn:aws:logs:sa-east-1:*:*
+            - Effect: Allow
+              Action:
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource:
+                - >-
+                  arn:aws:logs:sa-east-1:*:log-group:/aws/lambda/UpdateOngoingRecording:*
+            - Sid: AllowUpdateCameraTable
+              Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+                - dynamodb:PutItem
+              Resource: arn:aws:dynamodb:sa-east-1:*:table/ENV:DYNAMO_TABLE_NAME
+      RecursiveLoop: Terminate
+      SnapStart:
+        ApplyOn: None
+      Events:
+        IoTRule1:
+          Type: IoTRule
+          Properties:
+            Sql: |-
+              SET
+                @nowMs        = timestamp(),
+                @day          = floor(@nowMs / 1000 / 86400),
+                @thing        = topic(3),
+                @transaction  = topic(4),
+                @pk           = concat('Camera#', @thing)
+
+              SELECT
+                @pk AS PK,
+                concat('Rec#', @transaction) AS SK,
+
+                @transaction   AS transactionId,
+                status  AS status,
+                @nowMs AS updatedAt,
+
+                'Recs#ALL' AS allRecordingsPk,
+                concat(cast(@nowMs as String), '#', @pk, '#', @transaction) AS allRecordingsSk,
+
+                'Ongoing#ALL' AS ongoingRecordingsPk,
+                concat(cast(@nowMs as String), '#', @pk, '#', @transaction) AS ongoingRecordingsSk,
+                
+                fps             AS currentFPS,
+                bitrate         AS currentBitrate,
+                recordedSeconds AS lengthSec,
+               
+              FROM 'yx/recordings/+/+/status'
+              WHERE
+                  @thing = clientid() AND status = 'ONGOING' 
+      RuntimeManagementConfig:
+        UpdateRuntimeOn: Auto

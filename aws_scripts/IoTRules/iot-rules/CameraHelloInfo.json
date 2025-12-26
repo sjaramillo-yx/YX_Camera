@@ -1,0 +1,20 @@
+{
+    "rule": {
+        "ruleName": "CameraHelloInfo",
+        "sql": "SELECT\n  concat('Camera#', cast(thingName as String)) AS PK,\n  'info' AS SK,\n  firmwareVersion,\n  videoInfo.sensor.name as sensor,\n  timestamp() AS updatedAt\nFROM 'yx/cameras/hello'\nWHERE thingName = clientid()\n",
+        "description": "Extract information about the camera when it first boots and connects to the server",
+        "createdAt": "2025-12-16T11:46:30-03:00",
+        "actions": [
+            {
+                "dynamoDBv2": {
+                    "roleArn": "ENV:DYNAMO_ROLE_ARN",
+                    "putItem": {
+                        "tableName": "ENV:DYNAMO_TABLE_NAME"
+                    }
+                }
+            }
+        ],
+        "ruleDisabled": false,
+        "awsIotSqlVersion": "2016-03-23"
+    }
+}
