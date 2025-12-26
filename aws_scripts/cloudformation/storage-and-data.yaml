@@ -1,0 +1,140 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Core storage for YX Camera (S3 bucket, DynamoDB table, and IoT rule role)
+
+Parameters:
+  BucketName:
+    Type: String
+    Default: !Sub "yx-${AWS::AccountId}-cam-data"
+    Description: S3 bucket used for firmware, video, and logs.
+  TableName:
+    Type: String
+    Default: yx-cam-data
+    Description: DynamoDB table for camera metadata and recordings.
+  IotRuleRoleName:
+    Type: String
+    Default: !Sub "iot-rule-dynamo-${TableName}"
+    Description: IAM role used by IoT Rules to write into the table.
+
+Resources:
+  CameraDataBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref BucketName
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+
+  CameraDataBucketPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref CameraDataBucket
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: EnforceTLS
+            Effect: Deny
+            Principal: '*'
+            Action: 's3:*'
+            Resource:
+              - !Sub '${CameraDataBucket.Arn}'
+              - !Sub '${CameraDataBucket.Arn}/*'
+            Condition:
+              Bool:
+                aws:SecureTransport: false
+
+  CameraDataTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Ref TableName
+      BillingMode: PAYPERREQUEST
+      AttributeDefinitions:
+        - AttributeName: PK
+          AttributeType: S
+        - AttributeName: SK
+          AttributeType: S
+        - AttributeName: allRecordingsPk
+          AttributeType: S
+        - AttributeName: allRecordingsSk
+          AttributeType: S
+        - AttributeName: ongoingRecordingsPk
+          AttributeType: S
+        - AttributeName: ongoingRecordingsSk
+          AttributeType: S
+        - AttributeName: camerasByLastSeenPk
+          AttributeType: S
+        - AttributeName: camerasByLastSeenSk
+          AttributeType: S
+      KeySchema:
+        - AttributeName: PK
+          KeyType: HASH
+        - AttributeName: SK
+          KeyType: RANGE
+      GlobalSecondaryIndexes:
+        - IndexName: all-recordings
+          KeySchema:
+            - AttributeName: allRecordingsPk
+              KeyType: HASH
+            - AttributeName: allRecordingsSk
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: ongoing-recordings
+          KeySchema:
+            - AttributeName: ongoingRecordingsPk
+              KeyType: HASH
+            - AttributeName: ongoingRecordingsSk
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+        - IndexName: cameras-by-last-seen
+          KeySchema:
+            - AttributeName: camerasByLastSeenPk
+              KeyType: HASH
+            - AttributeName: camerasByLastSeenSk
+              KeyType: RANGE
+          Projection:
+            ProjectionType: ALL
+
+  IotRuleDynamoRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Ref IotRuleRoleName
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: iot.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: DynamoWrite
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: DynamoWrite
+                Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:GetItem
+                Resource:
+                  - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableName}
+                  - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableName}/index/*
+
+Outputs:
+  BucketName:
+    Value: !Ref CameraDataBucket
+    Description: Name of the S3 bucket storing firmware, logs, and videos.
+  TableName:
+    Value: !Ref CameraDataTable
+    Description: DynamoDB table name for camera data.
+  TableArn:
+    Value: !GetAtt CameraDataTable.Arn
+    Description: ARN of the DynamoDB table.
+  IotRuleRoleArn:
+    Value: !GetAtt IotRuleDynamoRole.Arn
+    Description: Role ARN IoT Rules should assume when writing to DynamoDB.

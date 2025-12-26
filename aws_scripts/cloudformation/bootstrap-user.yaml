@@ -1,0 +1,47 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Bootstrap IAM user and policy used by automation scripts.
+
+Parameters:
+  UserName:
+    Type: String
+    Default: bootstrapper
+  ManagedPolicyName:
+    Type: String
+    Default: FullBootstrap
+  PolicyDocumentS3Url:
+    Type: String
+    Description: S3 URL (s3://bucket/key.json) containing the FullBootstrap.json policy document.
+
+Resources:
+  BootstrapUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: !Ref UserName
+
+  BootstrapPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: !Ref ManagedPolicyName
+      PolicyDocument:
+        Fn::Transform:
+          Name: AWS::Include
+          Parameters:
+            Location: !Ref PolicyDocumentS3Url
+      Users:
+        - !Ref BootstrapUser
+
+  BootstrapAccessKey:
+    Type: AWS::IAM::AccessKey
+    Properties:
+      UserName: !Ref BootstrapUser
+
+Outputs:
+  BootstrapUserName:
+    Value: !Ref BootstrapUser
+  BootstrapPolicyArn:
+    Value: !Ref BootstrapPolicy
+  AccessKeyId:
+    Value: !Ref BootstrapAccessKey
+  SecretAccessKey:
+    Value: !GetAtt BootstrapAccessKey.SecretAccessKey
+    Description: Copy this value safely; it is shown only at stack creation time.

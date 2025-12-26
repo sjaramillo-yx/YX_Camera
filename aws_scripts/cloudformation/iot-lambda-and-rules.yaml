@@ -1,0 +1,323 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Lambda and IoT Topic Rules that write camera status/recordings into DynamoDB.
+
+Parameters:
+  TableName:
+    Type: String
+    Default: yx-cam-data
+  IotRuleRoleArn:
+    Type: String
+    Description: ARN of the role IoT rules assume for DynamoDB actions.
+  LambdaName:
+    Type: String
+    Default: UpdateOngoingRecording
+  LambdaMemory:
+    Type: Number
+    Default: 256
+  LambdaTimeout:
+    Type: Number
+    Default: 10
+
+Resources:
+  OngoingRecordingFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${LambdaName}-exec"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: DynamoUpdate
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:UpdateItem
+                  - dynamodb:PutItem
+                Resource:
+                  - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableName}
+                  - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableName}/index/*
+
+  OngoingRecordingFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Ref LambdaName
+      Role: !GetAtt OngoingRecordingFunctionRole.Arn
+      Handler: index.lambda_handler
+      Runtime: python3.11
+      MemorySize: !Ref LambdaMemory
+      Timeout: !Ref LambdaTimeout
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref TableName
+      Code:
+        ZipFile: |
+          import os
+          import boto3
+
+          ddb = boto3.client("dynamodb")
+          TABLE = os.environ["TABLE_NAME"]
+
+          def _n(x):
+              return {"N": str(x)}
+
+          def _s(x):
+              return {"S": str(x)}
+
+          def lambda_handler(event, context):
+              pk = event["PK"]
+              sk = event["SK"]
+
+              status = event.get("status")
+              updated_at = event.get("updatedAt")
+              transaction_id = event.get("transactionId")
+
+              set_parts = []
+              remove_parts = []
+              names = {"#st": "status"}
+              values = {}
+
+              def set_attr(name, value_av):
+                  placeholder = f":{name}"
+                  set_parts.append(f"{name} = {placeholder}")
+                  values[placeholder] = value_av
+
+              if status is not None:
+                  set_parts.append("#st = :st")
+                  values[":st"] = _s(status)
+              if updated_at is not None:
+                  set_attr("updatedAt", _n(updated_at))
+              if transaction_id is not None:
+                  set_attr("transactionId", _s(transaction_id))
+
+              if event.get("allRecordingsPk") is not None:
+                  set_attr("allRecordingsPk", _s(event["allRecordingsPk"]))
+              if event.get("allRecordingsSk") is not None:
+                  set_attr("allRecordingsSk", _s(event["allRecordingsSk"]))
+
+              if event.get("ongoingRecordingsPk") is not None and event.get("ongoingRecordingsSk") is not None:
+                  set_attr("ongoingRecordingsPk", _s(event["ongoingRecordingsPk"]))
+                  set_attr("ongoingRecordingsSk", _s(event["ongoingRecordingsSk"]))
+              else:
+                  remove_parts.extend(["ongoingRecordingsPk", "ongoingRecordingsSk"])
+
+              if event.get("currentFPS") is not None:
+                  set_attr("currentFPS", _n(event["currentFPS"]))
+              if event.get("currentBitrate") is not None:
+                  set_attr("currentBitrate", _n(event["currentBitrate"]))
+              if event.get("lengthSec") is not None:
+                  set_attr("lengthSec", _n(event["lengthSec"]))
+
+              update_expr = []
+              if set_parts:
+                  update_expr.append("SET " + ", ".join(set_parts))
+              if remove_parts:
+                  update_expr.append("REMOVE " + ", ".join(remove_parts))
+
+              ddb.update_item(
+                  TableName=TABLE,
+                  Key={"PK": _s(pk), "SK": _s(sk)},
+                  UpdateExpression=" ".join(update_expr),
+                  ExpressionAttributeNames=names,
+                  ExpressionAttributeValues=values,
+              )
+
+              return {"ok": True}
+
+  CameraHelloInfoRule:
+    Type: AWS::IoT::TopicRule
+    Properties:
+      RuleName: CameraHelloInfo
+      TopicRulePayload:
+        AwsIotSqlVersion: '2016-03-23'
+        RuleDisabled: false
+        Sql: |
+          SELECT
+            concat('Camera#', cast(thingName as String)) AS PK,
+            'info' AS SK,
+            firmwareVersion,
+            videoInfo.sensor.name as sensor,
+            timestamp() AS updatedAt
+          FROM 'yx/cameras/hello'
+          WHERE thingName = clientid()
+        Actions:
+          - DynamoDBv2:
+              RoleArn: !Ref IotRuleRoleArn
+              PutItem:
+                TableName: !Ref TableName
+
+  CameraHelloStatusRule:
+    Type: AWS::IoT::TopicRule
+    Properties:
+      RuleName: CameraHelloStatus
+      TopicRulePayload:
+        AwsIotSqlVersion: '2016-03-23'
+        RuleDisabled: false
+        Sql: |
+          SET
+              @serverTimeSec = floor(timestamp() / 1000),
+              @timeDiff = abs(@serverTimeSec - deviceTime),
+              @nowMs = timestamp(),
+              @pad = concat('0000000000000', cast(@nowMs as String)),
+              @lastSeenSortable = substring(@pad, length(@pad) - 13)
+
+          SELECT
+            concat('Camera#', thingName) AS PK,
+            'status' AS SK,
+            false AS recording,
+            @nowMs AS lastSeen,
+            @timeDiff AS driftSec,
+            sdCardInfo.present AS sdPresent,
+            CASE sdCardInfo.present WHEN true THEN sdCardInfo.sizeMB END AS sdSizeMB,
+            CASE sdCardInfo.present WHEN true THEN sdCardInfo.freeMB END AS sdFreeMB,
+            'Cameras#ALL' as camerasByLastSeenPk,
+            concat(@lastSeenSortable , '#', thingName) as camerasByLastSeenSk
+          FROM 'yx/cameras/hello'
+          WHERE thingName = clientid()
+        Actions:
+          - DynamoDBv2:
+              RoleArn: !Ref IotRuleRoleArn
+              PutItem:
+                TableName: !Ref TableName
+
+  CameraCurrentStatusRule:
+    Type: AWS::IoT::TopicRule
+    Properties:
+      RuleName: CameraCurrentStatus
+      TopicRulePayload:
+        AwsIotSqlVersion: '2016-03-23'
+        RuleDisabled: false
+        Sql: |
+          SET
+              @serverTimeSec = floor(timestamp() / 1000),
+              @timeDiff = abs(@serverTimeSec - deviceTime),
+              @nowMs = timestamp(),
+              @pad = concat('0000000000000', cast(@nowMs as String)),
+              @lastSeenSortable = substring(@pad, length(@pad) - 13)
+
+          SELECT
+              concat('Camera#', cast(thingName as String)) AS PK,
+              'status' AS SK,
+              isRecording as recording,
+              @nowMs AS lastSeen,
+              @timeDiff AS driftSec,
+              sdCardInfo.present AS sdPresent,
+              CASE sdCardInfo.present WHEN true THEN sdCardInfo.sizeMB END AS sdSizeMB,
+              CASE sdCardInfo.present WHEN true THEN sdCardInfo.freeMB END AS sdFreeMB,
+              'Cameras#ALL' as camerasByLastSeenPk,
+              concat(@lastSeenSortable , '#', thingName) as camerasByLastSeenSk
+          FROM 'yx/cameras/status'
+          WHERE thingName = clientid()
+        Actions:
+          - DynamoDBv2:
+              RoleArn: !Ref IotRuleRoleArn
+              PutItem:
+                TableName: !Ref TableName
+
+  RecordingStatusRule:
+    Type: AWS::IoT::TopicRule
+    Properties:
+      RuleName: RecordingStatus
+      TopicRulePayload:
+        AwsIotSqlVersion: '2016-03-23'
+        RuleDisabled: false
+        Sql: |
+          SET
+            @nowMs        = timestamp(),
+            @day          = floor(@nowMs / 1000 / 86400),
+            @thing        = topic(3),
+            @transaction  = topic(4),
+            @isStart      = (status = 'STARTED'),
+            @isDone       = (status = 'DONE'),
+            @isFail       = (status = 'ERROR'),
+            @pk           = concat('Camera#', @thing)
+
+          SELECT
+            @pk AS PK,
+            concat('Rec#', @transaction) AS SK,
+            @transaction   AS transactionId,
+            status  AS status,
+            @nowMs AS updatedAt,
+            'Recs#ALL' AS allRecordingsPk,
+            concat(cast(@nowMs as String), '#', @pk, '#', @transaction) AS allRecordingsSk,
+            CASE @isStart WHEN true THEN targetBitrate END AS targetBitrate,
+            CASE @isStart WHEN true THEN targetFps     END AS targetFps,
+            CASE @isDone WHEN true THEN filename       END AS filename,
+            CASE @isDone WHEN true THEN filesize        END AS filesize,
+            CASE @isDone WHEN true THEN recordedSeconds END AS lengthSec,
+            CASE @isFail WHEN true THEN errorCode END AS errorCode,
+            CASE @isFail WHEN true THEN errorMessage END AS errorMessage,
+            CASE @isFail WHEN true THEN errorOrigin END AS failedModule,
+            CASE @isFail WHEN true THEN timestamp END AS timestamp
+          FROM 'yx/recordings/+/+/status'
+          WHERE
+              @thing = clientid() AND status <> 'ONGOING'
+        Actions:
+          - DynamoDBv2:
+              RoleArn: !Ref IotRuleRoleArn
+              PutItem:
+                TableName: !Ref TableName
+
+  RecordingStatusOngoingRule:
+    Type: AWS::IoT::TopicRule
+    Properties:
+      RuleName: RecordingStatusOngoing
+      TopicRulePayload:
+        AwsIotSqlVersion: '2016-03-23'
+        RuleDisabled: false
+        Sql: |
+          SET
+            @nowMs        = timestamp(),
+            @day          = floor(@nowMs / 1000 / 86400),
+            @thing        = topic(3),
+            @transaction  = topic(4),
+            @pk           = concat('Camera#', @thing)
+
+          SELECT
+            @pk AS PK,
+            concat('Rec#', @transaction) AS SK,
+            @transaction   AS transactionId,
+            status  AS status,
+            @nowMs AS updatedAt,
+            'Recs#ALL' AS allRecordingsPk,
+            concat(cast(@nowMs as String), '#', @pk, '#', @transaction) AS allRecordingsSk,
+            'Ongoing#ALL' AS ongoingRecordingsPk,
+            concat(cast(@nowMs as String), '#', @pk, '#', @transaction) AS ongoingRecordingsSk,
+            fps             AS currentFPS,
+            bitrate         AS currentBitrate,
+            recordedSeconds AS lengthSec
+          FROM 'yx/recordings/+/+/status'
+          WHERE
+              @thing = clientid() AND status = 'ONGOING'
+        Actions:
+          - Lambda:
+              FunctionArn: !GetAtt OngoingRecordingFunction.Arn
+
+  RecordingStatusOngoingPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt OngoingRecordingFunction.Arn
+      Principal: iot.amazonaws.com
+      SourceArn: !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:rule/RecordingStatusOngoing
+
+Outputs:
+  LambdaArn:
+    Value: !GetAtt OngoingRecordingFunction.Arn
+  HelloInfoRuleArn:
+    Value: !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:rule/${CameraHelloInfoRule}
+  HelloStatusRuleArn:
+    Value: !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:rule/${CameraHelloStatusRule}
+  CurrentStatusRuleArn:
+    Value: !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:rule/${CameraCurrentStatusRule}
+  RecordingStatusRuleArn:
+    Value: !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:rule/${RecordingStatusRule}
+  RecordingStatusOngoingRuleArn:
+    Value: !Sub arn:aws:iot:${AWS::Region}:${AWS::AccountId}:rule/${RecordingStatusOngoingRule}

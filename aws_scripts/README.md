@@ -22,22 +22,16 @@ to keep the `BOOTSTRAP_PROFILE` variable in your environment. If you have your o
 automations IAM user, you can set the `BOOTSTRAP_PROFILE` to the name of your
 profile and the rest of the scripts provided here will work seamlessly.
 
-## S3 Bucket creation
-This project uses S3 for storage and assumes a bucket structure as follows:
-```
-.
-├── firmware/
-├── videos/
-└── logs/
-```
-To generate a bucket and create this prefixes, run the
-[S3BucketCreation/createBucket.sh](S3BucketCreation/createBucket.sh) script. Note 
-that the environment variable `BOOTSTRAP_PROFILE` will determine the IAM user that 
-will execute the script, so if you didn't run the `createBootstrapper.sh` script and 
-don't want to use the default profile, be sure to set your desired profile using 
-```bash
-$ export BOOTSTRAP_PROFILE=<your-profile-here>
-```
+## CloudFormation templates
+The `cloudformation/` directory contains templates that replace the shell scripts:
+
+- `storage-and-data.yaml` – creates the S3 bucket (versioned) and DynamoDB table plus the IoT Rule role used for DynamoDB actions.
+- `iot-core.yaml` – provisions IoT Core fleet provisioning resources (policies, role, and provisioning template).
+- `iot-lambda-and-rules.yaml` – deploys the UpdateOngoingRecording Lambda function and all IoT Topic Rules.
+- `appsync.yaml` – defines the AppSync API, DynamoDB data source, resolvers, and functions.
+- `bootstrap-user.yaml` – creates the bootstrap IAM user, managed policy (loaded from `FullBootstrap.json` uploaded to S3), and access key.
+
+Deploy the stacks with `aws cloudformation deploy --template-file <file> --stack-name <name> --capabilities CAPABILITY_NAMED_IAM` and the parameters that match your environment (table name, bucket name, etc.).
 
 ## IoT Core provisioning
 This project follows the [Provisioning by claim](https://docs.aws.amazon.com/iot/latest/developerguide/provision-wo-cert.html#claim-based)
