@@ -1,0 +1,98 @@
+{
+  "TableName": "yx-cam-data",
+  "BillingMode": "PAY_PER_REQUEST",
+  "AttributeDefinitions": [
+    {
+      "AttributeName": "PK",
+      "AttributeType": "S"
+    },
+    {
+      "AttributeName": "SK",
+      "AttributeType": "S"
+    },
+    {
+      "AttributeName": "allRecordingsPk",
+      "AttributeType": "S"
+    },
+    {
+      "AttributeName": "allRecordingsSk",
+      "AttributeType": "S"
+    },
+    {
+      "AttributeName": "ongoingRecordingsPk",
+      "AttributeType": "S"
+    },
+    {
+      "AttributeName": "ongoingRecordingsSk",
+      "AttributeType": "S"
+    },
+    {
+      "AttributeName": "camerasByLastSeenPk",
+      "AttributeType": "S"
+    },
+    {
+      "AttributeName": "camerasByLastSeenSk",
+      "AttributeType": "S"
+    }
+  ],
+  "KeySchema": [
+    {
+      "AttributeName": "PK",
+      "KeyType": "HASH"
+    },
+    {
+      "AttributeName": "SK",
+      "KeyType": "RANGE"
+    }
+  ],
+  "GlobalSecondaryIndexes": [
+    {
+      "IndexName": "all-recordings",
+      "KeySchema": [
+        {
+          "AttributeName": "allRecordingsPk",
+          "KeyType": "HASH"
+        },
+        {
+          "AttributeName": "allRecordingsSk",
+          "KeyType": "RANGE"
+        }
+      ],
+      "Projection": {
+        "ProjectionType": "ALL"
+      }
+    },
+    {
+      "IndexName": "ongoing-recordings",
+      "KeySchema": [
+        {
+          "AttributeName": "ongoingRecordingsPk",
+          "KeyType": "HASH"
+        },
+        {
+          "AttributeName": "ongoingRecordingsSk",
+          "KeyType": "RANGE"
+        }
+      ],
+      "Projection": {
+        "ProjectionType": "ALL"
+      }
+    },
+    {
+      "IndexName": "cameras-by-last-seen",
+      "KeySchema": [
+        {
+          "AttributeName": "camerasByLastSeenPk",
+          "KeyType": "HASH"
+        },
+        {
+          "AttributeName": "camerasByLastSeenSk",
+          "KeyType": "RANGE"
+        }
+      ],
+      "Projection": {
+        "ProjectionType": "ALL"
+      }
+    }
+  ]
+}
