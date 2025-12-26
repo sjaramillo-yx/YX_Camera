@@ -23,17 +23,18 @@ automations IAM user, you can set the `BOOTSTRAP_PROFILE` to the name of your
 profile and the rest of the scripts provided here will work seamlessly.
 
 ## CloudFormation templates
-The `cloudformation/` directory contains templates that replace the shell scripts:
+The `cloudformation/` directory now includes a single-stack template that deploys the full solution:
 
-- `storage-and-data.yaml` – creates the S3 bucket (versioned) and DynamoDB table plus the IoT Rule role used for DynamoDB actions.
-- `iot-core.yaml` – provisions IoT Core fleet provisioning resources (policies, role, and provisioning template).
-- `iot-lambda-and-rules.yaml` – deploys the UpdateOngoingRecording Lambda function and all IoT Topic Rules.
-- `appsync.yaml` – defines the AppSync API, DynamoDB data source, resolvers, and functions.
-- `bootstrap-user.yaml` – creates the bootstrap IAM user, managed policy (using the embedded `FullBootstrap.json` content), and access key. The template now inlines the JSON so you do not need to stage it in S3.
+- `all-resources.yaml` – provisions storage (S3 + DynamoDB), IoT Core policies and fleet provisioning, the Lambda function and IoT topic rules, AppSync API, and the optional bootstrap IAM user in one stack.
 
-Everything done by the original shell scripts is represented in these templates; the only manual prerequisites are supplying environment-specific parameter values when you deploy each stack.
+Deploy everything with the helper script:
 
-Deploy the stacks with `aws cloudformation deploy --template-file <file> --stack-name <name> --capabilities CAPABILITY_NAMED_IAM` and the parameters that match your environment (table name, bucket name, etc.).
+```bash
+cd aws_scripts/cloudformation
+./deploy.sh <stack-name>
+```
+
+Optional environment variables let you adjust parameters (table name, API auth type, Lambda sizing, and whether to create the bootstrap user). The individual component templates remain for reference but are no longer deployed separately.
 
 ## IoT Core provisioning
 This project follows the [Provisioning by claim](https://docs.aws.amazon.com/iot/latest/developerguide/provision-wo-cert.html#claim-based)
