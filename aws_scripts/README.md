@@ -31,6 +31,8 @@ The `cloudformation/` directory contains templates that replace the shell script
 - `appsync.yaml` – defines the AppSync API, DynamoDB data source, resolvers, and functions.
 - `bootstrap-user.yaml` – creates the bootstrap IAM user, managed policy (loaded from `FullBootstrap.json` uploaded to S3), and access key.
 
+Everything done by the original shell scripts is represented in these templates; the only manual prerequisites are uploading your `FullBootstrap.json` policy document to S3 (for `bootstrap-user.yaml` to include) and supplying environment-specific parameter values when you deploy each stack.
+
 Deploy the stacks with `aws cloudformation deploy --template-file <file> --stack-name <name> --capabilities CAPABILITY_NAMED_IAM` and the parameters that match your environment (table name, bucket name, etc.).
 
 ## IoT Core provisioning
