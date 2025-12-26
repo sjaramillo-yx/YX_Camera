@@ -22,22 +22,17 @@ to keep the `BOOTSTRAP_PROFILE` variable in your environment. If you have your o
 automations IAM user, you can set the `BOOTSTRAP_PROFILE` to the name of your
 profile and the rest of the scripts provided here will work seamlessly.
 
-## S3 Bucket creation
-This project uses S3 for storage and assumes a bucket structure as follows:
-```
-.
-├── firmware/
-├── videos/
-└── logs/
-```
-To generate a bucket and create this prefixes, run the
-[S3BucketCreation/createBucket.sh](S3BucketCreation/createBucket.sh) script. Note 
-that the environment variable `BOOTSTRAP_PROFILE` will determine the IAM user that 
-will execute the script, so if you didn't run the `createBootstrapper.sh` script and 
-don't want to use the default profile, be sure to set your desired profile using 
+## CloudFormation templates
+The `cloudformation/` directory contains templates that replace the shell scripts. You can deploy everything in one stack with `cloudformation/all-in-one.yaml`, which includes storage, IoT Core, Lambda and IoT Topic Rules, AppSync, and the bootstrap IAM user (with the `FullBootstrap.json` content inlined).
+
+Use the helper script to deploy the full stack:
+
 ```bash
-$ export BOOTSTRAP_PROFILE=<your-profile-here>
+$ cd cloudformation
+$ ./deploy.sh <stack-name> [--parameter-overrides BucketName=... TableName=...]
 ```
+
+Everything done by the original shell scripts is represented in this template; the only manual prerequisites are supplying environment-specific parameter values when you deploy the stack.
 
 ## IoT Core provisioning
 This project follows the [Provisioning by claim](https://docs.aws.amazon.com/iot/latest/developerguide/provision-wo-cert.html#claim-based)
