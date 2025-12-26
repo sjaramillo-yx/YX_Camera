@@ -8,9 +8,6 @@ Parameters:
   ManagedPolicyName:
     Type: String
     Default: FullBootstrap
-  PolicyDocumentS3Url:
-    Type: String
-    Description: S3 URL (s3://bucket/key.json) containing the FullBootstrap.json policy document.
 
 Resources:
   BootstrapUser:
@@ -23,10 +20,203 @@ Resources:
     Properties:
       ManagedPolicyName: !Ref ManagedPolicyName
       PolicyDocument:
-        Fn::Transform:
-          Name: AWS::Include
-          Parameters:
-            Location: !Ref PolicyDocumentS3Url
+        Version: '2012-10-17'
+        Statement:
+          - Sid: CreateIoTCertificates
+            Effect: Allow
+            Action: iot:CreateKeysAndCertificate
+            Resource: "*"
+          - Sid: AttachIoTPoliciesToCertificates
+            Effect: Allow
+            Action:
+              - iot:AttachPolicy
+              - iot:ListAttachedPolicies
+            Resource: arn:aws:iot:*:*:cert/*
+          - Sid: StsWhoAmI
+            Effect: Allow
+            Action: sts:GetCallerIdentity
+            Resource: "*"
+          - Sid: ManageIoTPolicies
+            Effect: Allow
+            Action:
+              - iot:GetPolicy
+              - iot:CreatePolicy
+              - iot:ListPolicyVersions
+              - iot:CreatePolicyVersion
+              - iot:DeletePolicyVersion
+            Resource:
+              - arn:aws:iot:*:*:policy/cameraPolicy
+              - arn:aws:iot:*:*:policy/provisioningPolicy
+          - Sid: ManageProvisioningTemplate
+            Effect: Allow
+            Action:
+              - iot:DescribeProvisioningTemplate
+              - iot:DeleteProvisioningTemplateVersion
+              - iot:ListProvisioningTemplateVersions
+              - iot:CreateProvisioningTemplate
+              - iot:CreateProvisioningTemplateVersion
+            Resource: arn:aws:iot:*:*:provisioningtemplate/cameraTemplate
+          - Sid: PassProvisioningRoleToIoT
+            Effect: Allow
+            Action: iam:PassRole
+            Resource: arn:aws:iam::*:role/yx-IoTProvisioningRole
+            Condition:
+              StringEquals:
+                iam:PassedToService: iot.amazonaws.com
+          - Sid: CreateSpecificBucketOnly
+            Effect: Allow
+            Action: s3:CreateBucket
+            Resource: arn:aws:s3:::yx-*-cam-data
+          - Sid: EnableVersioningOnGeneratedBuckets
+            Effect: Allow
+            Action: s3:PutBucketVersioning
+            Resource: arn:aws:s3:::yx-*-cam-data
+          - Sid: PutOnlyInApprovedPrefixes
+            Effect: Allow
+            Action: s3:PutObject
+            Resource:
+              - arn:aws:s3:::yx-*-cam-data/videos/*
+              - arn:aws:s3:::yx-*-cam-data/logs/*
+              - arn:aws:s3:::yx-*-cam-data/firmware/*
+              - arn:aws:s3:::yx-*-cam-data/videos/
+              - arn:aws:s3:::yx-*-cam-data/logs/
+              - arn:aws:s3:::yx-*-cam-data/firmware/
+          - Sid: ManageProvisioningRole
+            Effect: Allow
+            Action:
+              - iam:GetRole
+              - iam:CreateRole
+              - iam:UpdateAssumeRolePolicy
+              - iam:AttachRolePolicy
+              - iam:ListAttachedRolePolicies
+            Resource: arn:aws:iam::*:role/yx-IoTProvisioningRole
+          - Sid: AllowAttachingAWSIoTThingsRegistration
+            Effect: Allow
+            Action: iam:AttachRolePolicy
+            Resource: arn:aws:iam::*:role/yx-IoTProvisioningRole
+            Condition:
+              ArnEquals:
+                iam:PolicyARN: arn:aws:iam::aws:policy/service-role/AWSIoTThingsRegistration
+          - Sid: DynamoBootstrapCreateAndIndexes
+            Effect: Allow
+            Action:
+              - dynamodb:CreateTable
+              - dynamodb:UpdateTable
+              - dynamodb:DescribeTable
+              - dynamodb:TagResource
+              - dynamodb:UntagResource
+            Resource: arn:aws:dynamodb:*:*:table/yx-cam-data
+          - Sid: ManageIoTTopicRules
+            Effect: Allow
+            Action:
+              - iot:CreateTopicRule
+              - iot:ReplaceTopicRule
+              - iot:DeleteTopicRule
+              - iot:GetTopicRule
+              - iot:ListTopicRules
+              - iot:EnableTopicRule
+              - iot:DisableTopicRule
+              - iot:TagResource
+              - iot:UntagResource
+              - iot:ListTagsForResource
+            Resource: arn:aws:iot:*:*:rule/*
+          - Sid: ManageDynamoRole
+            Effect: Allow
+            Action:
+              - iam:GetRole
+              - iam:CreateRole
+              - iam:UpdateAssumeRolePolicy
+              - iam:AttachRolePolicy
+              - iam:ListAttachedRolePolicies
+            Resource: arn:aws:iam::*:role/iot-rule-dynamo-*
+          - Sid: PassIoTRuleActionRole
+            Effect: Allow
+            Action: iam:PassRole
+            Resource: arn:aws:iam::*:role/iot-rule-dynamo-*
+            Condition:
+              StringEquals:
+                iam:PassedToService: iot.amazonaws.com
+          - Sid: LambdaDeploy
+            Effect: Allow
+            Action:
+              - lambda:CreateFunction
+              - lambda:UpdateFunctionCode
+              - lambda:UpdateFunctionConfiguration
+              - lambda:GetFunction
+              - lambda:GetFunctionConfiguration
+            Resource: arn:aws:lambda:*:*:function:*
+          - Sid: ManageLambdaInvokePermissionForIoTRules
+            Effect: Allow
+            Action:
+              - lambda:AddPermission
+              - lambda:RemovePermission
+              - lambda:GetPolicy
+            Resource: arn:aws:lambda:*:*:function:*
+          - Sid: ManageLambdaRoles
+            Effect: Allow
+            Action:
+              - iam:GetRole
+              - iam:CreateRole
+              - iam:UpdateAssumeRolePolicy
+              - iam:AttachRolePolicy
+              - iam:PutRolePolicy
+              - iam:ListAttachedRolePolicies
+            Resource: arn:aws:iam::*:role/*-exec
+          - Sid: AllowPassExecRoleToLambdaOnly
+            Effect: Allow
+            Action: iam:PassRole
+            Resource: arn:aws:iam::*:role/*-exec
+            Condition:
+              StringEquals:
+                iam:PassedToService: lambda.amazonaws.com
+          - Sid: AppSyncDeploy
+            Effect: Allow
+            Action:
+              - appsync:CreateGraphqlApi
+              - appsync:UpdateGraphqlApi
+              - appsync:GetGraphqlApi
+              - appsync:ListGraphqlApis
+              - appsync:StartSchemaCreation
+              - appsync:GetSchemaCreationStatus
+              - appsync:CreateDataSource
+              - appsync:UpdateDataSource
+              - appsync:GetDataSource
+              - appsync:ListDataSources
+              - appsync:CreateResolver
+              - appsync:UpdateResolver
+              - appsync:GetResolver
+              - appsync:ListResolvers
+              - appsync:CreateFunction
+              - appsync:UpdateFunction
+              - appsync:GetFunction
+              - appsync:ListFunctions
+              - appsync:TagResource
+              - appsync:UntagResource
+              - appsync:ListTagsForResource
+            Resource: "*"
+          - Sid: CreateAppSyncServiceLinkedRoleIfNeeded
+            Effect: Allow
+            Action: iam:CreateServiceLinkedRole
+            Resource: "*"
+            Condition:
+              StringEquals:
+                iam:AWSServiceName: appsync.amazonaws.com
+          - Sid: ManageAppSyncDatasourceRoles
+            Effect: Allow
+            Action:
+              - iam:CreateRole
+              - iam:GetRole
+              - iam:UpdateAssumeRolePolicy
+              - iam:PutRolePolicy
+              - iam:AttachRolePolicy
+            Resource: arn:aws:iam::*:role/appsync-*
+          - Sid: PassDatasourceRoleToAppSyncOnly
+            Effect: Allow
+            Action: iam:PassRole
+            Resource: arn:aws:iam::*:role/appsync-*
+            Condition:
+              StringEquals:
+                iam:PassedToService: appsync.amazonaws.com
       Users:
         - !Ref BootstrapUser
 

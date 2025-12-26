@@ -29,9 +29,9 @@ The `cloudformation/` directory contains templates that replace the shell script
 - `iot-core.yaml` – provisions IoT Core fleet provisioning resources (policies, role, and provisioning template).
 - `iot-lambda-and-rules.yaml` – deploys the UpdateOngoingRecording Lambda function and all IoT Topic Rules.
 - `appsync.yaml` – defines the AppSync API, DynamoDB data source, resolvers, and functions.
-- `bootstrap-user.yaml` – creates the bootstrap IAM user, managed policy (loaded from `FullBootstrap.json` uploaded to S3), and access key.
+- `bootstrap-user.yaml` – creates the bootstrap IAM user, managed policy (using the embedded `FullBootstrap.json` content), and access key. The template now inlines the JSON so you do not need to stage it in S3.
 
-Everything done by the original shell scripts is represented in these templates; the only manual prerequisites are uploading your `FullBootstrap.json` policy document to S3 (for `bootstrap-user.yaml` to include) and supplying environment-specific parameter values when you deploy each stack.
+Everything done by the original shell scripts is represented in these templates; the only manual prerequisites are supplying environment-specific parameter values when you deploy each stack.
 
 Deploy the stacks with `aws cloudformation deploy --template-file <file> --stack-name <name> --capabilities CAPABILITY_NAMED_IAM` and the parameters that match your environment (table name, bucket name, etc.).
 
