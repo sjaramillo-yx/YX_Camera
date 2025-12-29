@@ -2,9 +2,11 @@ AWSTemplateFormatVersion: "2010-09-09"
 Description: Storage (S3) for camera data.
 
 Parameters:
-   Environment:
+  Environment:
     Type: String
     AllowedValues: [dev, test, prod]
+  ParentStackName:
+    Type: String
 
 Resources:
   CameraDataBucket:
@@ -12,7 +14,7 @@ Resources:
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      BucketName: !Sub "cam-bucket-${Environment}"
+      BucketName: !Sub "${ParentStackName}-${AWS::AccountId}-${AWS::Region}-camera-data"
 
       VersioningConfiguration:
         Status: Enabled
