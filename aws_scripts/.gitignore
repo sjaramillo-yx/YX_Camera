@@ -7,3 +7,4 @@ __pycache__
 *.packaged.yaml
 *.packaged.json
 *.zip
+.build
