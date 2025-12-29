@@ -41,6 +41,15 @@ Resources:
         - Effect: Allow
           Action: iot:Publish
           Resource: !Sub arn:aws:iot:*:*:topic/${Environment}/recordings/${!iot:Connection.Thing.ThingName}/*
+        - Effect: Allow
+          Action: iot:Subscribe
+          Resource: !Sub arn:aws:iot:*:*:topicfilter/${Environment}/uploads/${!iot:Connection.Thing.ThingName}/*
+        - Effect: Allow
+          Action: iot:Receive
+          Resource: !Sub arn:aws:iot:*:*:topic/${Environment}/uploads/${!iot:Connection.Thing.ThingName}/*
+        - Effect: Allow
+          Action: iot:Publish
+          Resource: !Sub arn:aws:iot:*:*:topic/${Environment}/uploads/${!iot:Connection.Thing.ThingName}/*z
 
   IoTProvisionerRole:
     Type: AWS::IAM::Role
@@ -63,10 +72,15 @@ Resources:
                 Effect: Allow
                 Action:
                   - iot:CreateThing
+                  - iot:RegisterThing
                   - iot:DescribeThing
                   - iot:UpdateThing
+                  - iot:ListThingGroupsForThing
                   - iot:AttachThingPrincipal
+                  - iot:GetPolicy
                   - iot:AttachPolicy
+                  - iot:AttachPrincipalPolicy 
+                  - iot:CreateKeysAndCertificate
                   - iot:UpdateCertificate
                   - iot:DescribeCertificate
                 Resource: "*"
@@ -77,7 +91,7 @@ Resources:
       TemplateName: !Sub "cameraTemplate-${Environment}"
       Enabled: true
       ProvisioningRoleArn: !GetAtt IoTProvisionerRole.Arn
-      TemplateBody: |
+      TemplateBody: !Sub |
         {
           "Parameters": {
             "SerialNumber": {
@@ -91,7 +105,7 @@ Resources:
             "policy_cameraPolicy": {
               "Type": "AWS::IoT::Policy",
               "Properties": {
-                "PolicyName": "cameraPolicy"
+                "PolicyName": "cameraPolicy-${Environment}"
               }
             },
             "certificate": {
@@ -140,6 +154,7 @@ Resources:
           - Effect: Allow
             Action: iot:Connect
             Resource: "*"
+
           - Effect: Allow
             Action:
               - iot:Publish
@@ -148,25 +163,27 @@ Resources:
               - "arn:aws:iot:*:*:topic/$aws/certificates/create/json"
               - "arn:aws:iot:*:*:topic/$aws/certificates/create/json/accepted"
               - "arn:aws:iot:*:*:topic/$aws/certificates/create/json/rejected"
-              - !Sub 
-                - "arn:aws:iot:*:*:topic/$aws/provisioning-templates/${ProvisioningTemplateName}/provision/json" 
-                - { ProvisioningTemplateName: !Ref IoTFleetProvisioningTemplate }
               - !Sub
-                - "arn:aws:iot:*:*:topic/$aws/provisioning-templates/${ProvisioningTemplateName}/provision/json/accepted"
-                - { ProvisioningTemplateName: !Ref IoTFleetProvisioningTemplate }
-              - !Sub 
-                - "arn:aws:iot:*:*:topic/$aws/provisioning-templates/${ProvisioningTemplateName}/provision/json/rejected"
-                - { ProvisioningTemplateName: !Ref IoTFleetProvisioningTemplate }
+                - "arn:aws:iot:*:*:topic/$aws/provisioning-templates/${Tpl}/provision/json"
+                - { Tpl: !Ref IoTFleetProvisioningTemplate }
+              - !Sub
+                - "arn:aws:iot:*:*:topic/$aws/provisioning-templates/${Tpl}/provision/json/accepted"
+                - { Tpl: !Ref IoTFleetProvisioningTemplate }
+              - !Sub
+                - "arn:aws:iot:*:*:topic/$aws/provisioning-templates/${Tpl}/provision/json/rejected"
+                - { Tpl: !Ref IoTFleetProvisioningTemplate }
+
+          - Effect: Allow
             Action: iot:Subscribe
             Resource:
               - "arn:aws:iot:*:*:topicfilter/$aws/certificates/create/json/accepted"
               - "arn:aws:iot:*:*:topicfilter/$aws/certificates/create/json/rejected"
-              - !Sub 
-                - "arn:aws:iot:*:*:topicfilter/$aws/provisioning-templates/${ProvisioningTemplateName}/provision/json/accepted"
-                - { ProvisioningTemplateName: !Ref IoTFleetProvisioningTemplate }
-              - !Sub 
-                - "arn:aws:iot:*:*:topicfilter/$aws/provisioning-templates/${ProvisioningTemplateName}/provision/json/rejected"
-                - { ProvisioningTemplateName: !Ref IoTFleetProvisioningTemplate }
+              - !Sub
+                - "arn:aws:iot:*:*:topicfilter/$aws/provisioning-templates/${Tpl}/provision/json/accepted"
+                - { Tpl: !Ref IoTFleetProvisioningTemplate }
+              - !Sub
+                - "arn:aws:iot:*:*:topicfilter/$aws/provisioning-templates/${Tpl}/provision/json/rejected"
+                - { Tpl: !Ref IoTFleetProvisioningTemplate }
 
 
 Outputs:
