@@ -42,6 +42,7 @@ Resources:
       TemplateURL: nested/S3.yaml
       Parameters:
         Environment: !Ref Environment
+        ParentStackName: !Ref AWS::StackName
   
   AppSyncStack:
     Type: AWS::CloudFormation::Stack
