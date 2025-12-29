@@ -4,3 +4,5 @@
 *.key
 *.meta.json
 __pycache__
+*.packaged.yaml
+*.packaged.json
