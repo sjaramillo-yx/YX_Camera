@@ -1,0 +1,180 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: IoT core (policies, provisioner role, fleet provisioning template).
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, test, prod]
+
+Resources:
+  IoTCameraPolicy:
+    Type: AWS::IoT::Policy
+    Properties:
+      PolicyName: !Sub "cameraPolicy-${Environment}"
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Action: iot:Connect
+          Resource: '*'
+        - Effect: Allow
+          Action: iot:Publish
+          Resource: !Sub arn:aws:iot:*:*:topic/${Environment}/cameras/hello
+        - Effect: Allow
+          Action: iot:Publish
+          Resource: !Sub arn:aws:iot:*:*:topic/${Environment}/cameras/status
+        - Effect: Allow
+          Action: iot:Subscribe
+          Resource: arn:aws:iot:*:*:topicfilter/$aws/things/${iot:Connection.Thing.ThingName}/*
+        - Effect: Allow
+          Action: iot:Receive
+          Resource: arn:aws:iot:*:*:topic/$aws/things/${iot:Connection.Thing.ThingName}/*
+        - Effect: Allow
+          Action: iot:Publish
+          Resource: arn:aws:iot:*:*:topic/$aws/things/${iot:Connection.Thing.ThingName}/*
+        - Effect: Allow
+          Action: iot:Subscribe
+          Resource: !Sub arn:aws:iot:*:*:topicfilter/${Environment}/recordings/${!iot:Connection.Thing.ThingName}/*
+        - Effect: Allow
+          Action: iot:Receive
+          Resource: !Sub arn:aws:iot:*:*:topic/${Environment}/recordings/${!iot:Connection.Thing.ThingName}/*
+        - Effect: Allow
+          Action: iot:Publish
+          Resource: !Sub arn:aws:iot:*:*:topic/${Environment}/recordings/${!iot:Connection.Thing.ThingName}/*
+
+  IoTProvisionerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "IoT-provisioner-role-${Environment}"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: iot.amazonaws.com
+          Action: sts:AssumeRole
+
+      Policies:
+        - PolicyName: IoTProvisioningActions
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: Provisioning
+                Effect: Allow
+                Action:
+                  - iot:CreateThing
+                  - iot:DescribeThing
+                  - iot:UpdateThing
+                  - iot:AttachThingPrincipal
+                  - iot:AttachPolicy
+                  - iot:UpdateCertificate
+                  - iot:DescribeCertificate
+                Resource: "*"
+
+  IoTFleetProvisioningTemplate:
+    Type: AWS::IoT::ProvisioningTemplate
+    Properties:
+      TemplateName: !Sub "cameraTemplate-${Environment}"
+      Enabled: true
+      ProvisioningRoleArn: !GetAtt IoTProvisionerRole.Arn
+      TemplateBody: |
+        {
+          "Parameters": {
+            "SerialNumber": {
+              "Type": "String"
+            },
+            "AWS::IoT::Certificate::Id": {
+              "Type": "String"
+            }
+          },
+          "Resources": {
+            "policy_cameraPolicy": {
+              "Type": "AWS::IoT::Policy",
+              "Properties": {
+                "PolicyName": "cameraPolicy"
+              }
+            },
+            "certificate": {
+              "Type": "AWS::IoT::Certificate",
+              "Properties": {
+                "CertificateId": {
+                  "Ref": "AWS::IoT::Certificate::Id"
+                },
+                "Status": "Active",
+                "ThingPrincipalType": "EXCLUSIVE_THING"
+              }
+            },
+            "thing": {
+              "Type": "AWS::IoT::Thing",
+              "OverrideSettings": {
+                "AttributePayload": "MERGE",
+                "ThingGroups": "DO_NOTHING",
+                "ThingTypeName": "REPLACE"
+              },
+              "Properties": {
+                "AttributePayload": {},
+                "ThingGroups": [],
+                "ThingName": {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "VueltaCam_",
+                      {
+                        "Ref": "SerialNumber"
+                      }
+                    ]
+                  ]
+                }
+              }
+            }
+          }
+        }
+
+  IoTProvisioningPolicy:
+    Type: AWS::IoT::Policy
+    Properties:
+      PolicyName: !Sub "provisioningPolicy-${Environment}"
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: iot:Connect
+            Resource: "*"
+          - Effect: Allow
+            Action:
+              - iot:Publish
+              - iot:Receive
+            Resource:
+              - "arn:aws:iot:*:*:topic/$aws/certificates/create/json"
+              - "arn:aws:iot:*:*:topic/$aws/certificates/create/json/accepted"
+              - "arn:aws:iot:*:*:topic/$aws/certificates/create/json/rejected"
+              - !Sub 
+                - "arn:aws:iot:*:*:topic/$aws/provisioning-templates/${ProvisioningTemplateName}/provision/json" 
+                - { ProvisioningTemplateName: !Ref IoTFleetProvisioningTemplate }
+              - !Sub
+                - "arn:aws:iot:*:*:topic/$aws/provisioning-templates/${ProvisioningTemplateName}/provision/json/accepted"
+                - { ProvisioningTemplateName: !Ref IoTFleetProvisioningTemplate }
+              - !Sub 
+                - "arn:aws:iot:*:*:topic/$aws/provisioning-templates/${ProvisioningTemplateName}/provision/json/rejected"
+                - { ProvisioningTemplateName: !Ref IoTFleetProvisioningTemplate }
+            Action: iot:Subscribe
+            Resource:
+              - "arn:aws:iot:*:*:topicfilter/$aws/certificates/create/json/accepted"
+              - "arn:aws:iot:*:*:topicfilter/$aws/certificates/create/json/rejected"
+              - !Sub 
+                - "arn:aws:iot:*:*:topicfilter/$aws/provisioning-templates/${ProvisioningTemplateName}/provision/json/accepted"
+                - { ProvisioningTemplateName: !Ref IoTFleetProvisioningTemplate }
+              - !Sub 
+                - "arn:aws:iot:*:*:topicfilter/$aws/provisioning-templates/${ProvisioningTemplateName}/provision/json/rejected"
+                - { ProvisioningTemplateName: !Ref IoTFleetProvisioningTemplate }
+
+
+Outputs:
+  CameraPolicyName:
+    Value: !Ref IoTCameraPolicy
+  ProvisioningPolicyName:
+    Value: !Ref IoTProvisioningPolicy
+  ProvisioningTemplateName:
+    Value: !Ref IoTFleetProvisioningTemplate
+  ProvisionerRoleArn:
+    Value: !GetAtt IoTProvisionerRole.Arn

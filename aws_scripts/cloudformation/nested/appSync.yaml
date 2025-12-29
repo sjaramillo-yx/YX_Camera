@@ -1,27 +1,37 @@
-AWSTemplateFormatVersion: '2010-09-09'
-Description: AppSync API for camera status and recordings powered by DynamoDB.
+AWSTemplateFormatVersion: "2010-09-09"
+Description: AppSync GraphQL API (JavaScript resolvers) backed by DynamoDB.
 
 Parameters:
-  TableName:
+  Environment:
     Type: String
+    AllowedValues: [dev, test, prod]
+
+  DynamoTableName:
+    Type: String
+    Description: DynamoDB table name used by AppSync resolvers.
+
+  DynamoTableArn:
+    Type: String
+    Description: DynamoDB table ARN (used for IAM policies).
+
   AuthType:
     Type: String
     Default: AWS_IAM
     AllowedValues:
-      - API_KEY
       - AWS_IAM
-      - AMAZON_COGNITO_USER_POOLS
-      - OPENID_CONNECT
-      - AWS_LAMBDA
+      - API_KEY
+    Description: Primary AppSync auth mode.
+
 Conditions:
-  UseApiKey: !Equals [!Ref AuthType, API_KEY]
+  UseApiKeyAuth: !Equals [!Ref AuthType, API_KEY]
 
 Resources:
   GraphQLApi:
     Type: AWS::AppSync::GraphQLApi
     Properties:
-      Name: !Sub "${AWS::StackName}"
+      Name: !Sub "camera-db-api-${Environment}"
       AuthenticationType: !Ref AuthType
+      XrayEnabled: true
 
   GraphQLSchema:
     Type: AWS::AppSync::GraphQLSchema
@@ -34,8 +44,10 @@ Resources:
 
         type Camera {
           driftSec: Int
+          #  info
           firmwareVersion: String
           lastSeen: AWSTimestamp
+          #  status
           online: Boolean!
           recording: Boolean!
           sdFreeMB: Int
@@ -52,8 +64,11 @@ Resources:
         }
 
         type Query {
+          #  Get details about a particular camera
           getCamera(thingName: ID!): Camera
+          #  Returns cameras ordered by most-recent lastSeen first (via GSI sort key + descending query)
           listCameraStatuses(limit: Int, nextToken: String): CameraListPage!
+          #  Returns recordings ordered by most-recently updated first
           listRecordings(limit: Int, nextToken: String): RecordingsList!
         }
 
@@ -81,62 +96,65 @@ Resources:
           nextToken: String
         }
 
+
+
+  # Only created when AuthType == API_KEY
   GraphQLApiKey:
     Type: AWS::AppSync::ApiKey
-    Condition: UseApiKey
+    Condition: UseApiKeyAuth
     Properties:
       ApiId: !GetAtt GraphQLApi.ApiId
+      Description: !Sub "${Environment} API key"
 
   AppSyncDynamoRole:
     Type: AWS::IAM::Role
     Properties:
+      RoleName: !Sub "Appsync-ddb-role-${Environment}"
       AssumeRolePolicyDocument:
-        Version: '2012-10-17'
+        Version: "2012-10-17"
         Statement:
           - Effect: Allow
             Principal:
               Service: appsync.amazonaws.com
             Action: sts:AssumeRole
       Policies:
-        - PolicyName: DynamoAccess
+        - PolicyName: AppSyncDynamoRead
           PolicyDocument:
-            Version: '2012-10-17'
+            Version: "2012-10-17"
             Statement:
-              - Effect: Allow
+              - Sid: DynamoRead
+                Effect: Allow
                 Action:
                   - dynamodb:GetItem
-                  - dynamodb:PutItem
-                  - dynamodb:UpdateItem
-                  - dynamodb:DeleteItem
                   - dynamodb:Query
                   - dynamodb:Scan
-                  - dynamodb:BatchGetItem
-                  - dynamodb:BatchWriteItem
                 Resource:
-                  - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableName}
-                  - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableName}/*
+                  - !Ref DynamoTableArn
+                  - !Sub "${DynamoTableArn}/index/*"
 
-  CameraDataSource:
+  CameraTableDataSource:
     Type: AWS::AppSync::DataSource
     Properties:
       ApiId: !GetAtt GraphQLApi.ApiId
-      Name: !Sub "${AWS::StackName}-dynamo"
+      Name: camera_data_source
       Type: AMAZON_DYNAMODB
       ServiceRoleArn: !GetAtt AppSyncDynamoRole.Arn
       DynamoDBConfig:
-        TableName: !Ref TableName
         AwsRegion: !Ref AWS::Region
-        UseCallerCredentials: false
+        TableName: !Ref DynamoTableName
 
   GetCameraInfoFunction:
     Type: AWS::AppSync::FunctionConfiguration
+    DependsOn:
+      - GraphQLSchema
+      - CameraTableDataSource
     Properties:
       ApiId: !GetAtt GraphQLApi.ApiId
-      Name: !Sub "${AWS::StackName}-getCameraInfo"
-      DataSourceName: !Ref CameraDataSource
+      Name: !Sub GetCameraInfo_${Environment}
+      DataSourceName: !GetAtt CameraTableDataSource.Name
       Runtime:
         Name: APPSYNC_JS
-        RuntimeVersion: 1.0.0
+        RuntimeVersion: "1.0.0"
       Code: |
         import { util } from "@aws-appsync/utils";
 
@@ -158,13 +176,16 @@ Resources:
 
   GetCameraStatusFunction:
     Type: AWS::AppSync::FunctionConfiguration
+    DependsOn:
+      - GraphQLSchema
+      - CameraTableDataSource
     Properties:
       ApiId: !GetAtt GraphQLApi.ApiId
-      Name: !Sub "${AWS::StackName}-getCameraStatus"
-      DataSourceName: !Ref CameraDataSource
+      Name: !Sub GetCameraStatus_${Environment}
+      DataSourceName: !GetAtt CameraTableDataSource.Name
       Runtime:
         Name: APPSYNC_JS
-        RuntimeVersion: 1.0.0
+        RuntimeVersion: "1.0.0"
       Code: |
         import { util } from "@aws-appsync/utils";
 
@@ -186,26 +207,35 @@ Resources:
 
   GetCameraResolver:
     Type: AWS::AppSync::Resolver
+    DependsOn:
+      - GraphQLSchema
+      - GetCameraInfoFunction
+      - GetCameraStatusFunction
     Properties:
       ApiId: !GetAtt GraphQLApi.ApiId
       TypeName: Query
       FieldName: getCamera
       Kind: PIPELINE
-      PipelineConfig:
-        Functions:
-          - !GetAtt GetCameraInfoFunction.FunctionId
-          - !GetAtt GetCameraStatusFunction.FunctionId
       Runtime:
         Name: APPSYNC_JS
-        RuntimeVersion: 1.0.0
+        RuntimeVersion: "1.0.0"
       Code: |
-        import { util } from "@aws-appsync/utils";
-
+        /**
+        * Starts the resolver execution
+        * @param {import('@aws-appsync/utils').Context} ctx the context
+        * @returns {*} the return value sent to the first AppSync function
+        */
         export function request(ctx) {
           ctx.stash.thingName = ctx.args.thingName;
           return {};
         }
 
+
+        /**
+        * Returns the resolver result
+        * @param {import('@aws-appsync/utils').Context} ctx the context
+        * @returns {*} the return value of the last AppSync function response handler
+        */
         export function response(ctx) {
           const nowMs = util.time.nowEpochMilliSeconds();
           const argThingName = ctx.stash.thingName;
@@ -213,10 +243,13 @@ Resources:
           const status = ctx.stash.statusItem || null;
           const info = ctx.stash.infoItem || null;
 
+          // If neither exists, return null
           if (!status && !info) return null;
 
+          // Merge with status having precedence over info
           const merged = { ...(info ?? {}), ...(status ?? {}) };
 
+          // Derive thingName from PK if needed
           let derivedThingName = merged.thingName;
 
           if (!derivedThingName) {
@@ -232,30 +265,42 @@ Resources:
 
           return {
             thingName,
+
+            // status fields
             online,
             recording: merged.recording ?? false,
             lastSeen: merged.lastSeen,
             driftSec: merged.driftSec,
             sntpSynchronized,
+
             sdPresent: merged.sdPresent,
             sdSizeMB: merged.sdSizeMB,
             sdFreeMB: merged.sdFreeMB,
+
+            // info fields
             firmwareVersion: merged.firmwareVersion,
             sensorModel: merged.sensorModel,
           };
         }
+      PipelineConfig:
+        Functions:
+          - !GetAtt GetCameraInfoFunction.FunctionId
+          - !GetAtt GetCameraStatusFunction.FunctionId
 
   ListCameraStatusesResolver:
     Type: AWS::AppSync::Resolver
+    DependsOn:
+      - GraphQLSchema
+      - CameraTableDataSource
     Properties:
       ApiId: !GetAtt GraphQLApi.ApiId
       TypeName: Query
       FieldName: listCameraStatuses
-      DataSourceName: !Ref CameraDataSource
       Kind: UNIT
+      DataSourceName: !GetAtt CameraTableDataSource.Name
       Runtime:
         Name: APPSYNC_JS
-        RuntimeVersion: 1.0.0
+        RuntimeVersion: "1.0.0"
       Code: |
         import { util } from "@aws-appsync/utils";
 
@@ -266,7 +311,7 @@ Resources:
 
           return {
             operation: "Query",
-            index: "all-cameras",
+            index: "cameras-by-last-seen",
             query: {
               expression: "#pk = :pk",
               expressionNames: { "#pk": "camerasByLastSeenPk" },
@@ -274,7 +319,7 @@ Resources:
             },
             limit,
             nextToken,
-            scanIndexForward: false,
+            scanIndexForward: false, // newest first
           };
         }
 
@@ -284,11 +329,14 @@ Resources:
           const nowMs = util.time.nowEpochMilliSeconds();
 
           const mapped = items.map((it) => {
+            // Check if source includes thingName
             let thingName = it.thingName;
+            // If not, derive it from camerasByLastSeenSk
             if (!thingName && typeof it.camerasByLastSeenSk === "string") {
               const i = it.camerasByLastSeenSk.indexOf("#");
               if (i >= 0) thingName = it.camerasByLastSeenSk.slice(i + 1);
             }
+            // If camerasByLastSeenPk is not a string, obtain it from the table PK
             if (!thingName && typeof it.PK === "string" && it.PK.startsWith("Camera#")) {
               thingName = it.PK.slice("Camera#".length);
             }
@@ -296,7 +344,7 @@ Resources:
             const sntpSynchronized = it.driftSec < 31;
 
             return {
-              thingName,
+              thingName,                    // must be non-null for ID!
               online,
               recording: it.recording ?? false,
               lastSeen: it.lastSeen,
@@ -313,15 +361,18 @@ Resources:
 
   ListRecordingsResolver:
     Type: AWS::AppSync::Resolver
+    DependsOn:
+      - GraphQLSchema
+      - CameraTableDataSource
     Properties:
       ApiId: !GetAtt GraphQLApi.ApiId
       TypeName: Query
       FieldName: listRecordings
-      DataSourceName: !Ref CameraDataSource
       Kind: UNIT
+      DataSourceName: !GetAtt CameraTableDataSource.Name
       Runtime:
         Name: APPSYNC_JS
-        RuntimeVersion: 1.0.0
+        RuntimeVersion: "1.0.0"
       Code: |
         import { util } from "@aws-appsync/utils";
 
@@ -340,7 +391,7 @@ Resources:
             },
             limit,
             nextToken,
-            scanIndexForward: false,
+            scanIndexForward: false, // newest first
           };
         }
 
@@ -350,16 +401,23 @@ Resources:
           const mapped = items.map((it) => ({
             transactionId: it.transactionId,
             status: it.status ?? "UNKNOWN",
+
             hres: it.hres,
             vres: it.vres,
+
             targetFPS: it.targetFps,
             targetBitrate: it.targetBitrate,
+
             currentFPS: it.currentFPS,
             currentBitrate: it.currentBitrate,
+
             lengthSeconds: it.lengthSeconds ?? it.duration ?? it.recordedSeconds ?? it.lengthSec,
+
             filename: it.filename,
             filesize: it.filesize,
+
             updatedAt: it.updatedAt,
+
             errorCode: it.errorCode,
             errorMessage: it.errorMessage,
             failedModule: it.failedModule,
@@ -368,13 +426,16 @@ Resources:
 
           return { items: mapped, nextToken };
         }
-
 Outputs:
-  GraphQlApiId:
+  ApiId:
     Value: !GetAtt GraphQLApi.ApiId
-  GraphQlApiUrl:
+
+  GraphQLUrl:
     Value: !GetAtt GraphQLApi.GraphQLUrl
-  DataSourceName:
-    Value: !Ref CameraDataSource
-  DatasourceRoleArn:
-    Value: !GetAtt AppSyncDynamoRole.Arn
+
+  ApiKey:
+    Condition: UseApiKeyAuth
+    Value: !GetAtt GraphQLApiKey.ApiKey
+
+  ApiNameOut:
+    Value: !Sub "camera-db-api-${Environment}"

@@ -1,0 +1,35 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Storage (S3) for camera data.
+
+Parameters:
+   Environment:
+    Type: String
+    AllowedValues: [dev, test, prod]
+
+Resources:
+  CameraDataBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "cam-bucket-${Environment}"
+
+      VersioningConfiguration:
+        Status: Enabled
+
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+Outputs:
+  CameraDataBucketName:
+    Value: !Ref CameraDataBucket
+  CameraDataBucketArn:
+    Value: !GetAtt CameraDataBucket.Arn
