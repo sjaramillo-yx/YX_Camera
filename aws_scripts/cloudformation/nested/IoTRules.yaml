@@ -1,0 +1,278 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Nested stack for AWS IoT Rules + Lambda action.
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, test, prod]
+  DynamoTableName:
+    Type: String
+    Description: DynamoDB table name to write to.
+  DynamoTableArn:
+    Type: String
+    Description: DynamoDB table ARN (for Lambda permissions).
+  DynamoRoleArn:
+    Type: String
+    Description: IAM role ARN assumed by IoT Rules for DynamoDBv2 actions.
+
+Resources:
+  UpdateOngoingRecordingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "update-rec-role-${Environment}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: "sts:AssumeRole"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: DynamoUpdate
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: DynamoUpdate
+                Effect: Allow
+                Action:
+                  - dynamodb:UpdateItem
+                  - dynamodb:PutItem
+                  - dynamodb:GetItem
+                Resource:
+                  - !Ref DynamoTableArn
+                  - !Sub "${DynamoTableArn}/index/*"
+
+  UpdateOngoingRecordingFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "updateOngoingRecording_${Environment}"
+      Description: Updates the ongoing recording item in DynamoDB.
+      Runtime: python3.12
+      Handler: lambda_function.lambda_handler
+      Role: !GetAtt UpdateOngoingRecordingRole.Arn
+      Timeout: 10
+      MemorySize: 256
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref DynamoTableName
+      # Local path; 'aws cloudformation package' uploads and rewrites.
+      Code: lambda/UpdateOngoingRecording.zip
+
+  IotRecordingStatusOngoingRuleInvokePerm:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: "lambda:InvokeFunction"
+      FunctionName: !Ref UpdateOngoingRecordingFunction
+      Principal: "iot.amazonaws.com"
+      SourceArn: !GetAtt IotRecordingStatusOngoingRule.Arn
+
+  IotCameraCurrentStatusRule:
+    Type: AWS::IoT::TopicRule
+    Properties:
+      RuleName: !Sub "CameraCurrentStatus_${Environment}"
+      TopicRulePayload:
+        AwsIotSqlVersion: "2016-03-23"
+        RuleDisabled: false
+        Description: "Extract information about the current camera status from periodic messages"
+        Sql: |
+          SET 
+              @serverTimeSec = floor(timestamp() / 1000),
+              @timeDiff = abs(@serverTimeSec - deviceTime),
+              @nowMs = timestamp(),
+              @pad = concat('0000000000000', cast(@nowMs as String)),
+              @lastSeenSortable = substring(@pad, length(@pad) - 13)
+          
+          SELECT 
+              concat('Camera#', cast(thingName as String)) AS PK, 
+              'status' AS SK, 
+              isRecording as recording, 
+              @nowMs AS lastSeen,
+              @timeDiff AS driftSec,
+            
+              sdCardInfo.present AS sdPresent,
+            
+              CASE sdCardInfo.present
+                  WHEN true THEN sdCardInfo.sizeMB
+              END AS sdSizeMB,
+          
+              CASE sdCardInfo.present
+                  WHEN true THEN sdCardInfo.freeMB
+              END AS sdFreeMB
+            
+              'Cameras#ALL' as camerasByLastSeenPk,
+              concat(@lastSeenSortable , '#', thingName) as camerasByLastSeenSk
+          
+          FROM 'yx/cameras/status' 
+          WHERE thingName = clientid() 
+        Actions:
+          - DynamoDBv2:
+              RoleArn: !Ref DynamoRoleArn
+              PutItem:
+                TableName: !Ref DynamoTableName
+
+  IotCameraHelloInfoRule:
+    Type: AWS::IoT::TopicRule
+    Properties:
+      RuleName: !Sub "CameraHelloInfo_${Environment}"
+      TopicRulePayload:
+        AwsIotSqlVersion: "2016-03-23"
+        RuleDisabled: false
+        Description: "Extract information about the camera when it first boots and connects to the server"
+        Sql: |
+          SELECT
+            concat('Camera#', cast(thingName as String)) AS PK,
+            'info' AS SK,
+            firmwareVersion,
+            videoInfo.sensor.name as sensor,
+            timestamp() AS updatedAt
+          FROM 'yx/cameras/hello'
+          WHERE thingName = clientid()
+        Actions:
+          - DynamoDBv2:
+              RoleArn: !Ref DynamoRoleArn
+              PutItem:
+                TableName: !Ref DynamoTableName
+
+  IotCameraHelloStatusRule:
+    Type: AWS::IoT::TopicRule
+    Properties:
+      RuleName: !Sub "CameraHelloStatus_${Environment}"
+      TopicRulePayload:
+        AwsIotSqlVersion: "2016-03-23"
+        RuleDisabled: false
+        Description: "Populate the status item for a camera when receiving the hello message"
+        Sql: |
+          SET 
+              @serverTimeSec = floor(timestamp() / 1000),
+              @timeDiff = abs(@serverTimeSec - deviceTime),
+              @nowMs = timestamp(),
+              @pad = concat('0000000000000', cast(@nowMs as String)),
+              @lastSeenSortable = substring(@pad, length(@pad) - 13)
+          
+          SELECT
+            concat('Camera#', thingName) AS PK,
+            'status' AS SK,
+            
+            false AS recording,
+            
+            @nowMs AS lastSeen,
+            @timeDiff AS driftSec,
+            
+            sdCardInfo.present AS sdPresent,
+            
+            CASE sdCardInfo.present
+              WHEN true THEN sdCardInfo.sizeMB
+            END AS sdSizeMB,
+          
+            CASE sdCardInfo.present
+              WHEN true THEN sdCardInfo.freeMB
+            END AS sdFreeMB
+            
+            'Cameras#ALL' as camerasByLastSeenPk,
+            concat(@lastSeenSortable , '#', thingName) as camerasByLastSeenSk
+          
+          FROM 'yx/cameras/hello'
+          WHERE thingName = clientid()
+        Actions:
+          - DynamoDBv2:
+              RoleArn: !Ref DynamoRoleArn
+              PutItem:
+                TableName: !Ref DynamoTableName
+
+  IotRecordingStatusRule:
+    Type: AWS::IoT::TopicRule
+    Properties:
+      RuleName: !Sub "RecordingStatus_${Environment}"
+      TopicRulePayload:
+        AwsIotSqlVersion: "2016-03-23"
+        RuleDisabled: false
+        Description: "Extracts the recording status from messages published by the camera"
+        Sql: |
+          SET
+            @nowMs        = timestamp(),
+            @day          = floor(@nowMs / 1000 / 86400),
+            @thing        = topic(3),
+            @transaction  = topic(4),
+            @isStart      = (status = 'STARTED'),
+            @isDone       = (status = 'DONE'),
+            @isFail       = (status = 'ERROR'),
+            @pk           = concat('Camera#', @thing)
+          
+          SELECT
+            @pk AS PK,
+            concat('Rec#', @transaction) AS SK,
+          
+            @transaction   AS transactionId,
+            status  AS status,
+            @nowMs AS updatedAt,
+          
+            'Recs#ALL' AS allRecordingsPk,
+            concat(cast(@nowMs as String), '#', @pk, '#', @transaction) AS allRecordingsSk,
+          
+            CASE @isStart WHEN true THEN targetBitrate END AS targetBitrate,
+            CASE @isStart WHEN true THEN targetFps     END AS targetFps,
+            
+            CASE @isDone WHEN true THEN filename        END AS filename,
+            CASE @isDone WHEN true THEN filesize        END AS filesize,
+            CASE @isDone WHEN true THEN recordedSeconds END AS lengthSec,
+            
+            CASE @isFail WHEN true THEN errorCode END AS errorCode,
+            CASE @isFail WHEN true THEN errorMessage END AS errorMessage,
+            CASE @isFail WHEN true THEN errorOrigin END AS failedModule,
+            CASE @isFail WHEN true THEN timestamp END AS timestamp
+          
+          FROM 'yx/recordings/+/+/status'
+          WHERE
+              @thing = clientid() AND status <> 'ONGOING'
+        Actions:
+          - DynamoDBv2:
+              RoleArn: !Ref DynamoRoleArn
+              PutItem:
+                TableName: !Ref DynamoTableName
+
+  IotRecordingStatusOngoingRule:
+    Type: AWS::IoT::TopicRule
+    Properties:
+      RuleName: !Sub "RecordingStatusOngoing_${Environment}"
+      TopicRulePayload:
+        AwsIotSqlVersion: "2016-03-23"
+        RuleDisabled: false
+        Description: "Extracts the recording status from messages published by the camera during an ongoing recording"
+        Sql: |
+          SET
+            @nowMs        = timestamp(),
+            @day          = floor(@nowMs / 1000 / 86400),
+            @thing        = topic(3),
+            @transaction  = topic(4),
+            @pk           = concat('Camera#', @thing)
+          
+          SELECT
+            @pk AS PK,
+            concat('Rec#', @transaction) AS SK,
+          
+            @transaction   AS transactionId,
+            status  AS status,
+            @nowMs AS updatedAt,
+          
+            'Recs#ALL' AS allRecordingsPk,
+            concat(cast(@nowMs as String), '#', @pk, '#', @transaction) AS allRecordingsSk,
+          
+            'Ongoing#ALL' AS ongoingRecordingsPk,
+            concat(cast(@nowMs as String), '#', @pk, '#', @transaction) AS ongoingRecordingsSk,
+            
+            fps             AS currentFPS,
+            bitrate         AS currentBitrate,
+            recordedSeconds AS lengthSec,
+           
+          FROM 'yx/recordings/+/+/status'
+          WHERE
+              @thing = clientid() AND status = 'ONGOING' 
+        Actions:
+          - Lambda:
+              FunctionArn: !GetAtt UpdateOngoingRecordingFunction.Arn
+
+Outputs:
+  UpdateOngoingRecordingLambdaArn:
+    Value: !GetAtt UpdateOngoingRecordingFunction.Arn

@@ -1,0 +1,66 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: VueltaCam AWS stack with nested stacks for each resource.
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - test
+      - prod
+
+Resources:
+  DynamoStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: nested/dynamoDB.yaml
+      Parameters:
+        Environment: !Ref Environment
+
+  IoTRulesStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: DynamoStack
+    Properties:
+      TemplateURL: nested/IoTRules.yaml
+      Parameters:
+        Environment: !Ref Environment
+        DynamoTableName: !GetAtt DynamoStack.Outputs.TableName
+        DynamoTableArn: !GetAtt DynamoStack.Outputs.TableArn
+        DynamoRoleArn: !GetAtt DynamoStack.Outputs.IoTRuleRoleArn
+  
+  IoTCoreStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: nested/IoTCore.yaml
+      Parameters:
+        Environment: !Ref Environment
+  
+  S3Stack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: nested/S3.yaml
+      Parameters:
+        Environment: !Ref Environment
+  
+  AppSyncStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: DynamoStack
+    Properties:
+      TemplateURL: nested/appSync.yaml
+      Parameters:
+        Environment: !Ref Environment
+        DynamoTableName: !GetAtt DynamoStack.Outputs.TableName
+        DynamoTableArn: !GetAtt DynamoStack.Outputs.TableArn
+        # AuthType: AWS_IAM # optional (or API_KEY)
+
+
+Outputs:
+  RootStackName:
+    Value: !Ref AWS::StackName
+  DynamoTableName:
+    Value: !GetAtt DynamoStack.Outputs.TableName
+  IotRuleRoleArn:
+    Value: !GetAtt DynamoStack.Outputs.IoTRuleRoleArn
+  UpdateOngoingRecordingLambdaArn:
+    Value: !GetAtt IoTRulesStack.Outputs.UpdateOngoingRecordingLambdaArn

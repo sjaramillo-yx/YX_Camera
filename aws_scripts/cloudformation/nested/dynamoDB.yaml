@@ -1,0 +1,77 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Child stack that deploys a DynamoDB Table.
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, test, prod]
+
+Resources:
+  CameraDataTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "cam-data-${Environment}"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - { AttributeName: PK, AttributeType: S }
+        - { AttributeName: SK, AttributeType: S }
+        - { AttributeName: allRecordingsPk, AttributeType: S }
+        - { AttributeName: allRecordingsSk, AttributeType: S }
+        - { AttributeName: ongoingRecordingsPk, AttributeType: S }
+        - { AttributeName: ongoingRecordingsSk, AttributeType: S }
+        - { AttributeName: camerasByLastSeenPk, AttributeType: S }
+        - { AttributeName: camerasByLastSeenSk, AttributeType: S }
+      KeySchema:
+        - { AttributeName: PK, KeyType: HASH }
+        - { AttributeName: SK, KeyType: RANGE }
+      GlobalSecondaryIndexes:
+        - IndexName: all-recordings
+          Projection: { ProjectionType: ALL }
+          KeySchema:
+            - { AttributeName: allRecordingsPk, KeyType: HASH }
+            - { AttributeName: allRecordingsSk, KeyType: RANGE }
+        - IndexName: ongoing-recordings
+          Projection: { ProjectionType: ALL }
+          KeySchema:
+            - { AttributeName: ongoingRecordingsPk, KeyType: HASH }
+            - { AttributeName: ongoingRecordingsSk, KeyType: RANGE }
+        - IndexName: cameras-by-last-seen
+          Projection: { ProjectionType: ALL }
+          KeySchema:
+            - { AttributeName: camerasByLastSeenPk, KeyType: HASH }
+            - { AttributeName: camerasByLastSeenSk, KeyType: RANGE }
+  
+  # IAM role for IoT Rules
+  IoTRuleDynamoRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "IoT-rules-role-${Environment}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: iot.amazonaws.com
+            Action: "sts:AssumeRole"
+      Policies:
+        - PolicyName: !Sub DynamoWrite-${Environment}
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: DynamoWrite
+                Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:GetItem
+                Resource:
+                  - !GetAtt CameraDataTable.Arn
+                  - !Sub "${CameraDataTable.Arn}/index/*"
+
+Outputs:
+  TableName:
+    Value: !Ref CameraDataTable
+  TableArn:
+    Value: !GetAtt CameraDataTable.Arn
+  IoTRuleRoleArn:
+    Value: !GetAtt IoTRuleDynamoRole.Arn

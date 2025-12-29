@@ -1,0 +1,441 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: AppSync GraphQL API (JavaScript resolvers) backed by DynamoDB.
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, test, prod]
+
+  DynamoTableName:
+    Type: String
+    Description: DynamoDB table name used by AppSync resolvers.
+
+  DynamoTableArn:
+    Type: String
+    Description: DynamoDB table ARN (used for IAM policies).
+
+  AuthType:
+    Type: String
+    Default: AWS_IAM
+    AllowedValues:
+      - AWS_IAM
+      - API_KEY
+    Description: Primary AppSync auth mode.
+
+Conditions:
+  UseApiKeyAuth: !Equals [!Ref AuthType, API_KEY]
+
+Resources:
+  GraphQLApi:
+    Type: AWS::AppSync::GraphQLApi
+    Properties:
+      Name: !Sub "camera-db-api-${Environment}"
+      AuthenticationType: !Ref AuthType
+      XrayEnabled: true
+
+  GraphQLSchema:
+    Type: AWS::AppSync::GraphQLSchema
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      Definition: |
+        schema {
+          query: Query
+        }
+
+        type Camera {
+          driftSec: Int
+          #  info
+          firmwareVersion: String
+          lastSeen: AWSTimestamp
+          #  status
+          online: Boolean!
+          recording: Boolean!
+          sdFreeMB: Int
+          sdPresent: Boolean
+          sdSizeMB: Int
+          sensorModel: String
+          sntpSynchronized: Boolean
+          thingName: ID!
+        }
+
+        type CameraListPage {
+          items: [Camera!]!
+          nextToken: String
+        }
+
+        type Query {
+          #  Get details about a particular camera
+          getCamera(thingName: ID!): Camera
+          #  Returns cameras ordered by most-recent lastSeen first (via GSI sort key + descending query)
+          listCameraStatuses(limit: Int, nextToken: String): CameraListPage!
+          #  Returns recordings ordered by most-recently updated first
+          listRecordings(limit: Int, nextToken: String): RecordingsList!
+        }
+
+        type Recording {
+          currentBitrate: Int
+          currentFPS: Int
+          errorCode: String
+          errorMessage: String
+          errorTimestamp: AWSTimestamp
+          failedModule: String
+          filename: String
+          filesize: Int
+          hres: Int
+          lengthSeconds: Int
+          status: String!
+          targetBitrate: Int
+          targetFPS: Int
+          transactionId: ID!
+          updatedAt: AWSTimestamp
+          vres: Int
+        }
+
+        type RecordingsList {
+          items: [Recording!]!
+          nextToken: String
+        }
+
+
+
+  # Only created when AuthType == API_KEY
+  GraphQLApiKey:
+    Type: AWS::AppSync::ApiKey
+    Condition: UseApiKeyAuth
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      Description: !Sub "${Environment} API key"
+
+  AppSyncDynamoRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "Appsync-ddb-role-${Environment}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: appsync.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: AppSyncDynamoRead
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: DynamoRead
+                Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:Query
+                  - dynamodb:Scan
+                Resource:
+                  - !Ref DynamoTableArn
+                  - !Sub "${DynamoTableArn}/index/*"
+
+  CameraTableDataSource:
+    Type: AWS::AppSync::DataSource
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      Name: camera_data_source
+      Type: AMAZON_DYNAMODB
+      ServiceRoleArn: !GetAtt AppSyncDynamoRole.Arn
+      DynamoDBConfig:
+        AwsRegion: !Ref AWS::Region
+        TableName: !Ref DynamoTableName
+
+  GetCameraInfoFunction:
+    Type: AWS::AppSync::FunctionConfiguration
+    DependsOn:
+      - GraphQLSchema
+      - CameraTableDataSource
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      Name: !Sub GetCameraInfo_${Environment}
+      DataSourceName: !GetAtt CameraTableDataSource.Name
+      Runtime:
+        Name: APPSYNC_JS
+        RuntimeVersion: "1.0.0"
+      Code: |
+        import { util } from "@aws-appsync/utils";
+
+        export function request(ctx) {
+          const thingName = ctx.stash.thingName;
+          return {
+            operation: "GetItem",
+            key: util.dynamodb.toMapValues({
+              PK: `Camera#${thingName}`,
+              SK: "info",
+            }),
+          };
+        }
+
+        export function response(ctx) {
+          ctx.stash.infoItem = ctx.result ?? null;
+          return ctx.result;
+        }
+
+  GetCameraStatusFunction:
+    Type: AWS::AppSync::FunctionConfiguration
+    DependsOn:
+      - GraphQLSchema
+      - CameraTableDataSource
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      Name: !Sub GetCameraStatus_${Environment}
+      DataSourceName: !GetAtt CameraTableDataSource.Name
+      Runtime:
+        Name: APPSYNC_JS
+        RuntimeVersion: "1.0.0"
+      Code: |
+        import { util } from "@aws-appsync/utils";
+
+        export function request(ctx) {
+          const thingName = ctx.stash.thingName;
+          return {
+            operation: "GetItem",
+            key: util.dynamodb.toMapValues({
+              PK: `Camera#${thingName}`,
+              SK: "status",
+            }),
+          };
+        }
+
+        export function response(ctx) {
+          ctx.stash.statusItem = ctx.result ?? null;
+          return ctx.result;
+        }
+
+  GetCameraResolver:
+    Type: AWS::AppSync::Resolver
+    DependsOn:
+      - GraphQLSchema
+      - GetCameraInfoFunction
+      - GetCameraStatusFunction
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      TypeName: Query
+      FieldName: getCamera
+      Kind: PIPELINE
+      Runtime:
+        Name: APPSYNC_JS
+        RuntimeVersion: "1.0.0"
+      Code: |
+        /**
+        * Starts the resolver execution
+        * @param {import('@aws-appsync/utils').Context} ctx the context
+        * @returns {*} the return value sent to the first AppSync function
+        */
+        export function request(ctx) {
+          ctx.stash.thingName = ctx.args.thingName;
+          return {};
+        }
+
+
+        /**
+        * Returns the resolver result
+        * @param {import('@aws-appsync/utils').Context} ctx the context
+        * @returns {*} the return value of the last AppSync function response handler
+        */
+        export function response(ctx) {
+          const nowMs = util.time.nowEpochMilliSeconds();
+          const argThingName = ctx.stash.thingName;
+
+          const status = ctx.stash.statusItem || null;
+          const info = ctx.stash.infoItem || null;
+
+          // If neither exists, return null
+          if (!status && !info) return null;
+
+          // Merge with status having precedence over info
+          const merged = { ...(info ?? {}), ...(status ?? {}) };
+
+          // Derive thingName from PK if needed
+          let derivedThingName = merged.thingName;
+
+          if (!derivedThingName) {
+            const pk = merged.PK || status?.PK || info?.PK;
+            if (typeof pk === "string" && pk.startsWith("Camera#")) {
+              derivedThingName = pk.slice("Camera#".length);
+            }
+          }
+
+          const thingName = derivedThingName ?? argThingName;
+          const online = merged.lastSeen != null ? (nowMs - merged.lastSeen) <= 30_000 : false;
+          const sntpSynchronized = merged.driftSec < 31;
+
+          return {
+            thingName,
+
+            // status fields
+            online,
+            recording: merged.recording ?? false,
+            lastSeen: merged.lastSeen,
+            driftSec: merged.driftSec,
+            sntpSynchronized,
+
+            sdPresent: merged.sdPresent,
+            sdSizeMB: merged.sdSizeMB,
+            sdFreeMB: merged.sdFreeMB,
+
+            // info fields
+            firmwareVersion: merged.firmwareVersion,
+            sensorModel: merged.sensorModel,
+          };
+        }
+      PipelineConfig:
+        Functions:
+          - !GetAtt GetCameraInfoFunction.FunctionId
+          - !GetAtt GetCameraStatusFunction.FunctionId
+
+  ListCameraStatusesResolver:
+    Type: AWS::AppSync::Resolver
+    DependsOn:
+      - GraphQLSchema
+      - CameraTableDataSource
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      TypeName: Query
+      FieldName: listCameraStatuses
+      Kind: UNIT
+      DataSourceName: !GetAtt CameraTableDataSource.Name
+      Runtime:
+        Name: APPSYNC_JS
+        RuntimeVersion: "1.0.0"
+      Code: |
+        import { util } from "@aws-appsync/utils";
+
+        export function request(ctx) {
+          const args = ctx.args ?? ctx.arguments ?? {};
+          const limit = args.limit ?? 50;
+          const nextToken = args.nextToken;
+
+          return {
+            operation: "Query",
+            index: "cameras-by-last-seen",
+            query: {
+              expression: "#pk = :pk",
+              expressionNames: { "#pk": "camerasByLastSeenPk" },
+              expressionValues: util.dynamodb.toMapValues({ ":pk": "Cameras#ALL" }),
+            },
+            limit,
+            nextToken,
+            scanIndexForward: false, // newest first
+          };
+        }
+
+        export function response(ctx) {
+          const { items = [], nextToken = null } = ctx.result ?? {};
+
+          const nowMs = util.time.nowEpochMilliSeconds();
+
+          const mapped = items.map((it) => {
+            // Check if source includes thingName
+            let thingName = it.thingName;
+            // If not, derive it from camerasByLastSeenSk
+            if (!thingName && typeof it.camerasByLastSeenSk === "string") {
+              const i = it.camerasByLastSeenSk.indexOf("#");
+              if (i >= 0) thingName = it.camerasByLastSeenSk.slice(i + 1);
+            }
+            // If camerasByLastSeenPk is not a string, obtain it from the table PK
+            if (!thingName && typeof it.PK === "string" && it.PK.startsWith("Camera#")) {
+              thingName = it.PK.slice("Camera#".length);
+            }
+            const online = it.lastSeen != null ? (nowMs - it.lastSeen) <= 30_000 : false;
+            const sntpSynchronized = it.driftSec < 31;
+
+            return {
+              thingName,                    // must be non-null for ID!
+              online,
+              recording: it.recording ?? false,
+              lastSeen: it.lastSeen,
+              driftSec: it.driftSec,
+              sntpSynchronized,
+              sdPresent: it.sdPresent,
+              sdSizeMB: it.sdSizeMB,
+              sdFreeMB: it.sdFreeMB
+            };
+          });
+
+          return { items: mapped, nextToken };
+        }
+
+  ListRecordingsResolver:
+    Type: AWS::AppSync::Resolver
+    DependsOn:
+      - GraphQLSchema
+      - CameraTableDataSource
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      TypeName: Query
+      FieldName: listRecordings
+      Kind: UNIT
+      DataSourceName: !GetAtt CameraTableDataSource.Name
+      Runtime:
+        Name: APPSYNC_JS
+        RuntimeVersion: "1.0.0"
+      Code: |
+        import { util } from "@aws-appsync/utils";
+
+        export function request(ctx) {
+          const args = ctx.args ?? ctx.arguments ?? {};
+          const limit = args.limit ?? 50;
+          const nextToken = args.nextToken;
+
+          return {
+            operation: "Query",
+            index: "all-recordings",
+            query: {
+              expression: "#pk = :pk",
+              expressionNames: { "#pk": "allRecordingsPk" },
+              expressionValues: util.dynamodb.toMapValues({ ":pk": "Recs#ALL" }),
+            },
+            limit,
+            nextToken,
+            scanIndexForward: false, // newest first
+          };
+        }
+
+        export function response(ctx) {
+          const { items = [], nextToken = null } = ctx.result ?? {};
+
+          const mapped = items.map((it) => ({
+            transactionId: it.transactionId,
+            status: it.status ?? "UNKNOWN",
+
+            hres: it.hres,
+            vres: it.vres,
+
+            targetFPS: it.targetFps,
+            targetBitrate: it.targetBitrate,
+
+            currentFPS: it.currentFPS,
+            currentBitrate: it.currentBitrate,
+
+            lengthSeconds: it.lengthSeconds ?? it.duration ?? it.recordedSeconds ?? it.lengthSec,
+
+            filename: it.filename,
+            filesize: it.filesize,
+
+            updatedAt: it.updatedAt,
+
+            errorCode: it.errorCode,
+            errorMessage: it.errorMessage,
+            failedModule: it.failedModule,
+            errorTimestamp: it.errorTimestamp,
+          }));
+
+          return { items: mapped, nextToken };
+        }
+Outputs:
+  ApiId:
+    Value: !GetAtt GraphQLApi.ApiId
+
+  GraphQLUrl:
+    Value: !GetAtt GraphQLApi.GraphQLUrl
+
+  ApiKey:
+    Condition: UseApiKeyAuth
+    Value: !GetAtt GraphQLApiKey.ApiKey
+
+  ApiNameOut:
+    Value: !Sub "camera-db-api-${Environment}"
