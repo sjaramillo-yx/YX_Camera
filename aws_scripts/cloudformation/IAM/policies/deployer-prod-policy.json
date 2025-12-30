@@ -1,0 +1,67 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "Sts",
+      "Effect": "Allow",
+      "Action": "sts:GetCallerIdentity",
+      "Resource": "*"
+    },
+    {
+      "Sid": "ArtifactsBucketOnly",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetBucketLocation",
+        "s3:ListBucket",
+        "s3:PutObject",
+        "s3:AbortMultipartUpload",
+        "s3:ListBucketMultipartUploads",
+        "s3:ListMultipartUploadParts"
+      ],
+      "Resource": [
+        "arn:aws:s3:::cfn-artifacts-${ACCOUNT_ID}-${REGION}",
+        "arn:aws:s3:::cfn-artifacts-${ACCOUNT_ID}-${REGION}/*"
+      ]
+    },
+    {
+      "Sid": "CloudFormationProdOnly",
+      "Effect": "Allow",
+      "Action": [
+        "cloudformation:CreateStack",
+        "cloudformation:UpdateStack",
+        "cloudformation:DeleteStack",
+        "cloudformation:CreateChangeSet",
+        "cloudformation:ExecuteChangeSet",
+        "cloudformation:DeleteChangeSet",
+        "cloudformation:Describe*",
+        "cloudformation:GetTemplateSummary",
+        "cloudformation:List*",
+        "cloudformation:ValidateTemplate"
+      ],
+      "Resource": [
+        "arn:aws:cloudformation:${REGION}:${ACCOUNT_ID}:stack/${STACK_BASE}-prod/*",
+        "arn:aws:cloudformation:${REGION}:${ACCOUNT_ID}:stack/${STACK_BASE}-prod-*/*",
+        "arn:aws:cloudformation:${REGION}:${ACCOUNT_ID}:changeSet/*"
+      ],
+      "Condition": {
+        "Bool": {
+          "aws:MultiFactorAuthPresent": "true"
+        }
+      }
+    },
+    {
+      "Sid": "PassOnlyCfnExecProd",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "arn:aws:iam::${ACCOUNT_ID}:role/cfn-exec-prod",
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "cloudformation.amazonaws.com"
+        },
+        "Bool": {
+          "aws:MultiFactorAuthPresent": "true"
+        }
+      }
+    }
+  ]
+}
