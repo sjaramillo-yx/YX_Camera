@@ -31,6 +31,7 @@ BUCKET="${CFN_ARTIFACT_BUCKET:-}"
 TEMPLATE="root.yaml"
 OUTDIR=".build"
 
+
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -p|--profile) PROFILE="${2:-}"; shift 2;;
@@ -121,11 +122,22 @@ aws "${AWS_ARGS[@]}" cloudformation package \
   --output-template-file "$PACKAGED_TEMPLATE"
 
 echo "==> Deploying stack: $STACK_NAME (env=$ENVIRONMENT)"
+
+if [[ "$ENVIRONMENT" == "dev" ]]; then
+  CFN_EXEC_ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/cfn-exec-dev"
+elif [[ "$ENVIRONMENT" == "test" ]]; then
+  CFN_EXEC_ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/cfn-exec-test"
+elif [[ "$ENVIRONMENT" == "prod" ]]; then
+  CFN_EXEC_ROLE_ARN="arn:aws:iam::${ACCOUNT_ID}:role/cfn-exec-prod"
+fi
+echo "==> Role ARN: ${CFN_EXEC_ROLE_ARN}"
+
 aws "${AWS_ARGS[@]}" cloudformation deploy \
   --stack-name "$STACK_NAME" \
   --template-file "$PACKAGED_TEMPLATE" \
   --capabilities CAPABILITY_NAMED_IAM \
   --parameter-overrides Environment="$ENVIRONMENT" \
+  --role-arn "$CFN_EXEC_ROLE_ARN" \
   --no-fail-on-empty-changeset
 
 echo "==> Done. Artifacts bucket: s3://$BUCKET"
