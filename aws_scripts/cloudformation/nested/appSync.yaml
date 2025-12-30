@@ -5,6 +5,8 @@ Parameters:
   Environment:
     Type: String
     AllowedValues: [dev, test, prod]
+  ParentStackName:
+    Type: String
 
   DynamoTableName:
     Type: String
@@ -29,7 +31,7 @@ Resources:
   GraphQLApi:
     Type: AWS::AppSync::GraphQLApi
     Properties:
-      Name: !Sub "camera-db-api-${Environment}"
+      Name: !Sub "${ParentStackName}-camera-db-api-${Environment}"
       AuthenticationType: !Ref AuthType
       XrayEnabled: true
 
@@ -109,7 +111,7 @@ Resources:
   AppSyncDynamoRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "Appsync-ddb-role-${Environment}"
+      RoleName: !Sub "Appsync-ddb-role-${ParentStackName}-${Environment}"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -150,7 +152,7 @@ Resources:
       - CameraTableDataSource
     Properties:
       ApiId: !GetAtt GraphQLApi.ApiId
-      Name: !Sub GetCameraInfo_${Environment}
+      Name: !Sub ${ParentStackName}_GetCameraInfo_${Environment}
       DataSourceName: !GetAtt CameraTableDataSource.Name
       Runtime:
         Name: APPSYNC_JS
@@ -181,7 +183,7 @@ Resources:
       - CameraTableDataSource
     Properties:
       ApiId: !GetAtt GraphQLApi.ApiId
-      Name: !Sub GetCameraStatus_${Environment}
+      Name: !Sub ${ParentStackName}_GetCameraStatus_${Environment}
       DataSourceName: !GetAtt CameraTableDataSource.Name
       Runtime:
         Name: APPSYNC_JS
@@ -438,4 +440,4 @@ Outputs:
     Value: !GetAtt GraphQLApiKey.ApiKey
 
   ApiNameOut:
-    Value: !Sub "camera-db-api-${Environment}"
+    Value: !Sub "${ParentStackName}-camera-db-api-${Environment}"

@@ -16,7 +16,8 @@ Resources:
     Properties:
       TemplateURL: nested/dynamoDB.yaml
       Parameters:
-        Environment: !Ref Environment
+        ParentStackName: !Select [0, !Split ["-", !Ref "AWS::StackName"]]  # foo
+        Environment:    !Select [1, !Split ["-", !Ref "AWS::StackName"]]  # dev
 
   IoTRulesStack:
     Type: AWS::CloudFormation::Stack
@@ -24,7 +25,8 @@ Resources:
     Properties:
       TemplateURL: nested/IoTRules.yaml
       Parameters:
-        Environment: !Ref Environment
+        ParentStackName: !Select [0, !Split ["-", !Ref "AWS::StackName"]]  # foo
+        Environment:    !Select [1, !Split ["-", !Ref "AWS::StackName"]]  # dev
         DynamoTableName: !GetAtt DynamoStack.Outputs.TableName
         DynamoTableArn: !GetAtt DynamoStack.Outputs.TableArn
         DynamoRoleArn: !GetAtt DynamoStack.Outputs.IoTRuleRoleArn
@@ -34,15 +36,16 @@ Resources:
     Properties:
       TemplateURL: nested/IoTCore.yaml
       Parameters:
-        Environment: !Ref Environment
+        ParentStackName: !Select [0, !Split ["-", !Ref "AWS::StackName"]]  # foo
+        Environment:    !Select [1, !Split ["-", !Ref "AWS::StackName"]]  # dev
   
   S3Stack:
     Type: AWS::CloudFormation::Stack
     Properties:
       TemplateURL: nested/S3.yaml
       Parameters:
-        Environment: !Ref Environment
-        ParentStackName: !Ref AWS::StackName
+        ParentStackName: !Select [0, !Split ["-", !Ref "AWS::StackName"]]  # foo
+        Environment:    !Select [1, !Split ["-", !Ref "AWS::StackName"]]  # dev
   
   AppSyncStack:
     Type: AWS::CloudFormation::Stack
@@ -50,7 +53,8 @@ Resources:
     Properties:
       TemplateURL: nested/appSync.yaml
       Parameters:
-        Environment: !Ref Environment
+        ParentStackName: !Select [0, !Split ["-", !Ref "AWS::StackName"]]  # foo
+        Environment:    !Select [1, !Split ["-", !Ref "AWS::StackName"]]  # dev
         DynamoTableName: !GetAtt DynamoStack.Outputs.TableName
         DynamoTableArn: !GetAtt DynamoStack.Outputs.TableArn
         # AuthType: AWS_IAM # optional (or API_KEY)

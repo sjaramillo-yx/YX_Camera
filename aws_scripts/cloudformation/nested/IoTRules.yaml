@@ -5,6 +5,8 @@ Parameters:
   Environment:
     Type: String
     AllowedValues: [dev, test, prod]
+  ParentStackName:
+    Type: String
   DynamoTableName:
     Type: String
     Description: DynamoDB table name to write to.
@@ -19,7 +21,7 @@ Resources:
   UpdateOngoingRecordingRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "update-rec-role-${Environment}"
+      RoleName: !Sub "update-rec-role-${ParentStackName}-${Environment}"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -47,7 +49,7 @@ Resources:
   UpdateOngoingRecordingFunction:
     Type: AWS::Lambda::Function
     Properties:
-      FunctionName: !Sub "updateOngoingRecording_${Environment}"
+      FunctionName: !Sub "${ParentStackName}_updateOngoingRecording_${Environment}"
       Description: Updates the ongoing recording item in DynamoDB.
       Runtime: python3.12
       Handler: lambda_function.lambda_handler
@@ -71,7 +73,7 @@ Resources:
   IotCameraCurrentStatusRule:
     Type: AWS::IoT::TopicRule
     Properties:
-      RuleName: !Sub "CameraCurrentStatus_${Environment}"
+      RuleName: !Sub "${ParentStackName}_CameraCurrentStatus_${Environment}"
       TopicRulePayload:
         AwsIotSqlVersion: "2016-03-23"
         RuleDisabled: false
@@ -104,7 +106,7 @@ Resources:
               'Cameras#ALL' as camerasByLastSeenPk,
               concat(@lastSeenSortable , '#', thingName) as camerasByLastSeenSk
           
-          FROM '${Environment}/cameras/status' 
+          FROM '${ParentStackName}/${Environment}/cameras/status' 
           WHERE thingName = clientid() 
         Actions:
           - DynamoDBv2:
@@ -115,7 +117,7 @@ Resources:
   IotCameraHelloInfoRule:
     Type: AWS::IoT::TopicRule
     Properties:
-      RuleName: !Sub "CameraHelloInfo_${Environment}"
+      RuleName: !Sub "${ParentStackName}_CameraHelloInfo_${Environment}"
       TopicRulePayload:
         AwsIotSqlVersion: "2016-03-23"
         RuleDisabled: false
@@ -127,7 +129,7 @@ Resources:
             firmwareVersion,
             videoInfo.sensor.name as sensor,
             timestamp() AS updatedAt
-          FROM '${Environment}/cameras/hello'
+          FROM '${ParentStackName}/${Environment}/cameras/hello'
           WHERE thingName = clientid()
         Actions:
           - DynamoDBv2:
@@ -138,7 +140,7 @@ Resources:
   IotCameraHelloStatusRule:
     Type: AWS::IoT::TopicRule
     Properties:
-      RuleName: !Sub "CameraHelloStatus_${Environment}"
+      RuleName: !Sub "${ParentStackName}_CameraHelloStatus_${Environment}"
       TopicRulePayload:
         AwsIotSqlVersion: "2016-03-23"
         RuleDisabled: false
@@ -173,7 +175,7 @@ Resources:
             'Cameras#ALL' as camerasByLastSeenPk,
             concat(@lastSeenSortable , '#', thingName) as camerasByLastSeenSk
           
-          FROM '${Environment}/cameras/hello'
+          FROM '${ParentStackName}/${Environment}/cameras/hello'
           WHERE thingName = clientid()
         Actions:
           - DynamoDBv2:
@@ -184,7 +186,7 @@ Resources:
   IotRecordingStatusRule:
     Type: AWS::IoT::TopicRule
     Properties:
-      RuleName: !Sub "RecordingStatus_${Environment}"
+      RuleName: !Sub "${ParentStackName}_RecordingStatus_${Environment}"
       TopicRulePayload:
         AwsIotSqlVersion: "2016-03-23"
         RuleDisabled: false
@@ -223,7 +225,7 @@ Resources:
             CASE @isFail WHEN true THEN errorOrigin END AS failedModule,
             CASE @isFail WHEN true THEN timestamp END AS timestamp
           
-          FROM '${Environment}/recordings/+/+/status'
+          FROM '${ParentStackName}/${Environment}/recordings/+/+/status'
           WHERE
               @thing = clientid() AND status <> 'ONGOING'
         Actions:
@@ -235,7 +237,7 @@ Resources:
   IotRecordingStatusOngoingRule:
     Type: AWS::IoT::TopicRule
     Properties:
-      RuleName: !Sub "RecordingStatusOngoing_${Environment}"
+      RuleName: !Sub "${ParentStackName}_RecordingStatusOngoing_${Environment}"
       TopicRulePayload:
         AwsIotSqlVersion: "2016-03-23"
         RuleDisabled: false
@@ -266,7 +268,7 @@ Resources:
             bitrate         AS currentBitrate,
             recordedSeconds AS lengthSec,
            
-          FROM '${Environment}/recordings/+/+/status'
+          FROM '${ParentStackName}/${Environment}/recordings/+/+/status'
           WHERE
               @thing = clientid() AND status = 'ONGOING' 
         Actions:

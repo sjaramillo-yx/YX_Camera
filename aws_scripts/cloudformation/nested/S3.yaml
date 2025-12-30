@@ -14,7 +14,7 @@ Resources:
     DeletionPolicy: Retain
     UpdateReplacePolicy: Retain
     Properties:
-      BucketName: !Sub "${ParentStackName}-${AWS::AccountId}-${AWS::Region}-camera-data"
+      BucketName: !Sub "${ParentStackName}-${Environment}-${AWS::AccountId}-${AWS::Region}-camera-data"
 
       VersioningConfiguration:
         Status: Enabled

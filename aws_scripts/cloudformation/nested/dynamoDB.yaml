@@ -5,12 +5,14 @@ Parameters:
   Environment:
     Type: String
     AllowedValues: [dev, test, prod]
+  ParentStackName:
+    Type: String
 
 Resources:
   CameraDataTable:
     Type: AWS::DynamoDB::Table
     Properties:
-      TableName: !Sub "cam-data-${Environment}"
+      TableName: !Sub "${ParentStackName}-cam-data-${Environment}"
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
         - { AttributeName: PK, AttributeType: S }
@@ -45,7 +47,7 @@ Resources:
   IoTRuleDynamoRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "IoT-rules-role-${Environment}"
+      RoleName: !Sub "IoT-rules-role-${ParentStackName}-${Environment}"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -54,7 +56,7 @@ Resources:
               Service: iot.amazonaws.com
             Action: "sts:AssumeRole"
       Policies:
-        - PolicyName: !Sub DynamoWrite-${Environment}
+        - PolicyName: !Sub ${ParentStackName}-DynamoWrite-${Environment}
           PolicyDocument:
             Version: "2012-10-17"
             Statement:

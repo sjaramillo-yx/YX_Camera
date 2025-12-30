@@ -5,12 +5,14 @@ Parameters:
   Environment:
     Type: String
     AllowedValues: [dev, test, prod]
+  ParentStackName:
+    Type: String
 
 Resources:
   IoTCameraPolicy:
     Type: AWS::IoT::Policy
     Properties:
-      PolicyName: !Sub "cameraPolicy-${Environment}"
+      PolicyName: !Sub "${ParentStackName}-cameraPolicy-${Environment}"
       PolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -19,10 +21,10 @@ Resources:
           Resource: '*'
         - Effect: Allow
           Action: iot:Publish
-          Resource: !Sub arn:aws:iot:*:*:topic/${Environment}/cameras/hello
+          Resource: !Sub arn:aws:iot:*:*:topic/${ParentStackName}/${Environment}/cameras/hello
         - Effect: Allow
           Action: iot:Publish
-          Resource: !Sub arn:aws:iot:*:*:topic/${Environment}/cameras/status
+          Resource: !Sub arn:aws:iot:*:*:topic/${ParentStackName}/${Environment}/cameras/status
         - Effect: Allow
           Action: iot:Subscribe
           Resource: arn:aws:iot:*:*:topicfilter/$aws/things/${iot:Connection.Thing.ThingName}/*
@@ -34,27 +36,27 @@ Resources:
           Resource: arn:aws:iot:*:*:topic/$aws/things/${iot:Connection.Thing.ThingName}/*
         - Effect: Allow
           Action: iot:Subscribe
-          Resource: !Sub arn:aws:iot:*:*:topicfilter/${Environment}/recordings/${!iot:Connection.Thing.ThingName}/*
+          Resource: !Sub arn:aws:iot:*:*:topicfilter/${ParentStackName}/${Environment}/recordings/${!iot:Connection.Thing.ThingName}/*
         - Effect: Allow
           Action: iot:Receive
-          Resource: !Sub arn:aws:iot:*:*:topic/${Environment}/recordings/${!iot:Connection.Thing.ThingName}/*
+          Resource: !Sub arn:aws:iot:*:*:topic/${ParentStackName}/${Environment}/recordings/${!iot:Connection.Thing.ThingName}/*
         - Effect: Allow
           Action: iot:Publish
-          Resource: !Sub arn:aws:iot:*:*:topic/${Environment}/recordings/${!iot:Connection.Thing.ThingName}/*
+          Resource: !Sub arn:aws:iot:*:*:topic/${ParentStackName}/${Environment}/recordings/${!iot:Connection.Thing.ThingName}/*
         - Effect: Allow
           Action: iot:Subscribe
-          Resource: !Sub arn:aws:iot:*:*:topicfilter/${Environment}/uploads/${!iot:Connection.Thing.ThingName}/*
+          Resource: !Sub arn:aws:iot:*:*:topicfilter/${ParentStackName}/${Environment}/uploads/${!iot:Connection.Thing.ThingName}/*
         - Effect: Allow
           Action: iot:Receive
-          Resource: !Sub arn:aws:iot:*:*:topic/${Environment}/uploads/${!iot:Connection.Thing.ThingName}/*
+          Resource: !Sub arn:aws:iot:*:*:topic/${ParentStackName}/${Environment}/uploads/${!iot:Connection.Thing.ThingName}/*
         - Effect: Allow
           Action: iot:Publish
-          Resource: !Sub arn:aws:iot:*:*:topic/${Environment}/uploads/${!iot:Connection.Thing.ThingName}/*z
+          Resource: !Sub arn:aws:iot:*:*:topic/${ParentStackName}/${Environment}/uploads/${!iot:Connection.Thing.ThingName}/*z
 
   IoTProvisionerRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "IoT-provisioner-role-${Environment}"
+      RoleName: !Sub "IoT-provisioner-role-${ParentStackName}-${Environment}"
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
@@ -88,7 +90,7 @@ Resources:
   IoTFleetProvisioningTemplate:
     Type: AWS::IoT::ProvisioningTemplate
     Properties:
-      TemplateName: !Sub "cameraTemplate-${Environment}"
+      TemplateName: !Sub "${ParentStackName}-cameraTemplate-${Environment}"
       Enabled: true
       ProvisioningRoleArn: !GetAtt IoTProvisionerRole.Arn
       TemplateBody: !Sub |
@@ -105,7 +107,7 @@ Resources:
             "policy_cameraPolicy": {
               "Type": "AWS::IoT::Policy",
               "Properties": {
-                "PolicyName": "cameraPolicy-${Environment}"
+                "PolicyName": "${ParentStackName}-cameraPolicy-${Environment}"
               }
             },
             "certificate": {
@@ -147,7 +149,7 @@ Resources:
   IoTProvisioningPolicy:
     Type: AWS::IoT::Policy
     Properties:
-      PolicyName: !Sub "provisioningPolicy-${Environment}"
+      PolicyName: !Sub "${ParentStackName}-provisioningPolicy-${Environment}"
       PolicyDocument:
         Version: "2012-10-17"
         Statement:
