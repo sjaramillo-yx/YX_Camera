@@ -52,7 +52,7 @@ Resources:
       FunctionName: !Sub "${ParentStackName}_updateOngoingRecording_${Environment}"
       Description: Updates the ongoing recording item in DynamoDB.
       Runtime: python3.12
-      Handler: lambda_function.lambda_handler
+      Handler: src/lambda_function.lambda_handler
       Role: !GetAtt UpdateOngoingRecordingRole.Arn
       Timeout: 10
       MemorySize: 256
@@ -195,8 +195,8 @@ Resources:
           SET
             @nowMs        = timestamp(),
             @day          = floor(@nowMs / 1000 / 86400),
-            @thing        = topic(3),
-            @transaction  = topic(4),
+            @thing        = topic(4),
+            @transaction  = topic(5),
             @isStart      = (status = 'STARTED'),
             @isDone       = (status = 'DONE'),
             @isFail       = (status = 'ERROR'),
@@ -246,8 +246,8 @@ Resources:
           SET
             @nowMs        = timestamp(),
             @day          = floor(@nowMs / 1000 / 86400),
-            @thing        = topic(3),
-            @transaction  = topic(4),
+            @thing        = topic(4),
+            @transaction  = topic(5),
             @pk           = concat('Camera#', @thing)
           
           SELECT
@@ -266,7 +266,7 @@ Resources:
             
             fps             AS currentFPS,
             bitrate         AS currentBitrate,
-            recordedSeconds AS lengthSec,
+            recordedSeconds AS lengthSec
            
           FROM '${ParentStackName}/${Environment}/recordings/+/+/status'
           WHERE

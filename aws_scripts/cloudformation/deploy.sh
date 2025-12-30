@@ -31,6 +31,9 @@ BUCKET="${CFN_ARTIFACT_BUCKET:-}"
 TEMPLATE="root.yaml"
 OUTDIR=".build"
 
+# Lambdas live in ./lambda/<function-name>/
+LAMBDA_ROOT="nested/lambda"
+
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -58,6 +61,7 @@ esac
 AWS_ARGS=()
 [[ -n "$PROFILE" ]] && AWS_ARGS+=(--profile "$PROFILE")
 
+
 # Region: prefer env/arg, else pull from config
 if [[ -z "$REGION" ]]; then
   REGION="$(aws "${AWS_ARGS[@]}" configure get region 2>/dev/null || true)"
@@ -68,6 +72,8 @@ if [[ -z "$REGION" ]]; then
 fi
 AWS_ARGS+=(--region "$REGION")
 
+ACCOUNT_ID="$(aws "${AWS_ARGS[@]}" sts get-caller-identity --query Account --output text)"
+
 if [[ ! -f "$TEMPLATE" ]]; then
   echo "Error: template not found: $TEMPLATE" >&2
   exit 2
@@ -76,7 +82,6 @@ fi
 # Create a default artifacts bucket if none provided.
 # Use account+region to keep it globally unique.
 if [[ -z "$BUCKET" ]]; then
-  ACCOUNT_ID="$(aws "${AWS_ARGS[@]}" sts get-caller-identity --query Account --output text)"
   BUCKET="cfn-artifacts-${ACCOUNT_ID}-${REGION}"
 fi
 
@@ -110,10 +115,77 @@ ensure_bucket() {
       BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true >/dev/null
 }
 
+zip_lambdas() {
+  local root="$1"
+
+  if [[ ! -d "$root" ]]; then
+    echo "==> No ./$root directory found; skipping lambda zips."
+    return 0
+  fi
+
+  if ! command -v zip >/dev/null 2>&1; then
+    echo "Error: 'zip' is required but not found in PATH." >&2
+    exit 2
+  fi
+
+  # Collect directories safely (so a non-zero from find doesn't abort under pipefail)
+  local -a dirs=()
+  while IFS= read -r -d '' d; do
+    dirs+=("$d")
+  done < <(find "$root" -mindepth 1 -maxdepth 1 -type d -print0 2>/dev/null || true)
+
+  if [[ ${#dirs[@]} -eq 0 ]]; then
+    echo "==> No subdirectories found under ./$root; skipping."
+    return 0
+  fi
+
+  for dir in "${dirs[@]}"; do
+    local name zip_path
+    name="$(basename "$dir")"
+    zip_path="${dir}/${name}.zip"
+
+    echo "==> Zipping lambda: ${dir} -> ${zip_path}"
+    rm -f "$zip_path"
+
+    (
+      cd "$dir"
+
+      # Don't let strict mode kill the whole deploy if zip returns "nothing to do"
+      set +e
+      zip -qr "${name}.zip" . \
+        -x "${name}.zip" \
+        -x '__pycache__/*' \
+        -x '*.pyc' \
+        -x '.pytest_cache/*' \
+        -x '.mypy_cache/*' \
+        -x '.venv/*' \
+        -x 'venv/*' \
+        -x '.git/*' \
+        -x 'node_modules/*'
+      rc=$?
+      set -e
+
+      # zip exit 12 = "nothing to do" (often empty dir / all excluded)
+      if [[ $rc -eq 12 ]]; then
+        echo "==> Warning: nothing to zip in ${dir} (zip exit 12). Continuing."
+        rm -f "${name}.zip"
+      elif [[ $rc -ne 0 ]]; then
+        echo "Error: zip failed in ${dir} (exit $rc)" >&2
+        exit $rc
+      fi
+    )
+  done
+}
+
+
 ensure_bucket "$BUCKET" "$REGION"
 
 mkdir -p "$OUTDIR"
+
 PACKAGED_TEMPLATE="${OUTDIR}/packaged.yaml"
+
+# ---- NEW: build lambda zip artifacts ----
+zip_lambdas "$LAMBDA_ROOT"
 
 echo "==> Packaging $TEMPLATE -> $PACKAGED_TEMPLATE"
 aws "${AWS_ARGS[@]}" cloudformation package \
