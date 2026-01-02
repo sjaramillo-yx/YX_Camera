@@ -74,6 +74,54 @@ AWS_ARGS+=(--region "$REGION")
 
 ACCOUNT_ID="$(aws "${AWS_ARGS[@]}" sts get-caller-identity --query Account --output text)"
 
+# Keep a copy of the "base" args (may include --profile) for the assume-role call
+AWS_BASE_ARGS=("${AWS_ARGS[@]}")
+
+assume_role_if_needed() {
+  local env="$1"
+  local arn role_name role_arn creds
+
+  arn="$(aws "${AWS_ARGS[@]}" sts get-caller-identity --query Arn --output text)"
+
+  # If we're already an assumed role, nothing to do.
+  if [[ "$arn" == *":assumed-role/"* ]]; then
+    return 0
+  fi
+
+  # Choose deployer role by env
+  if [[ "$env" == "prod" ]]; then
+    role_name="yx-deployer-prod"
+  else
+    role_name="yx-deployer-devtest"
+  fi
+
+  role_arn="arn:aws:iam::${ACCOUNT_ID}:role/${role_name}"
+
+  echo "==> Assuming role for deploy: ${role_arn}" >&2
+
+  # Assume using the *base* identity (profile/user keys)
+  creds="$(aws "${AWS_BASE_ARGS[@]}" sts assume-role \
+    --role-arn "$role_arn" \
+    --role-session-name "deploy-${STACK_NAME}-$(date +%s)" \
+    --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' \
+    --output text)"
+
+  export AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+  AWS_ACCESS_KEY_ID="$(awk '{print $1}' <<<"$creds")"
+  AWS_SECRET_ACCESS_KEY="$(awk '{print $2}' <<<"$creds")"
+  AWS_SESSION_TOKEN="$(awk '{print $3}' <<<"$creds")"
+
+  # IMPORTANT: once we export temp creds, stop using --profile so env creds take effect
+  AWS_ARGS=()
+  AWS_ARGS+=(--region "$REGION")
+
+  arn="$(aws "${AWS_ARGS[@]}" sts get-caller-identity --query Arn --output text)"
+  echo "==> Caller is now: $arn" >&2
+}
+
+assume_role_if_needed "$ENVIRONMENT"
+
+
 if [[ ! -f "$TEMPLATE" ]]; then
   echo "Error: template not found: $TEMPLATE" >&2
   exit 2
@@ -87,32 +135,27 @@ fi
 
 ensure_bucket() {
   local bucket="$1"
-  local region="$2"
+  local err=""
 
-  # If bucket exists and we can access it, this succeeds.
+  # The artifacts bucket must already exist (created by IAM/create.sh or manually).
   if aws "${AWS_ARGS[@]}" s3api head-bucket --bucket "$bucket" >/dev/null 2>&1; then
     return 0
   fi
 
-  echo "==> Creating artifacts bucket: s3://$bucket (region: $region)"
+  err="$(aws "${AWS_ARGS[@]}" s3api head-bucket --bucket "$bucket" 2>&1 || true)"
 
-  if [[ "$region" == "us-east-1" ]]; then
-    aws "${AWS_ARGS[@]}" s3api create-bucket --bucket "$bucket" >/dev/null
+  if echo "$err" | grep -qiE 'NoSuchBucket|NotFound|404'; then
+    echo "ERROR: Artifacts bucket s3://${bucket} does not exist." >&2
+    echo "       Create it first (via IAM/create.sh or manually), then re-run this deploy." >&2
+  elif echo "$err" | grep -qiE 'Forbidden|AccessDenied'; then
+    echo "ERROR: Artifacts bucket s3://${bucket} exists but is not accessible with the current credentials." >&2
+    echo "       Ensure you're assuming the deployer role and it has access to the bucket." >&2
   else
-    aws "${AWS_ARGS[@]}" s3api create-bucket \
-      --bucket "$bucket" \
-      --create-bucket-configuration "LocationConstraint=$region" >/dev/null
+    echo "ERROR: Unable to verify access to artifacts bucket s3://${bucket}." >&2
   fi
 
-  # Optional but helpful defaults
-  aws "${AWS_ARGS[@]}" s3api put-bucket-versioning \
-    --bucket "$bucket" \
-    --versioning-configuration Status=Enabled >/dev/null
-
-  aws "${AWS_ARGS[@]}" s3api put-public-access-block \
-    --bucket "$bucket" \
-    --public-access-block-configuration \
-      BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true >/dev/null
+  echo "Details: ${err}" >&2
+  exit 1
 }
 
 zip_lambdas() {
