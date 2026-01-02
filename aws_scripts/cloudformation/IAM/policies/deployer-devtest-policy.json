@@ -24,6 +24,17 @@
       ]
     },
     {
+      "Sid": "CloudFormationGlobalReadList",
+      "Effect": "Allow",
+      "Action": [
+        "cloudformation:ListStacks",
+        "cloudformation:DescribeAccountLimits",
+        "cloudformation:ValidateTemplate",
+        "cloudformation:GetTemplateSummary"
+      ],
+      "Resource": "*"
+    },
+    {
       "Sid": "CloudFormationDevTestOnly",
       "Effect": "Allow",
       "Action": [

@@ -1,0 +1,156 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "IoTConsoleReadOnly",
+      "Effect": "Allow",
+      "Action": [
+        "iot:Get*",
+        "iot:List*",
+        "iot:Describe*",
+        "iot:SearchIndex",
+        "iot:DescribeEndpoint",
+        "iot:GetRegistrationCode"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "IoTManageDevTestNamedResources",
+      "Effect": "Allow",
+      "Action": [
+        "iot:CreateThing",
+        "iot:UpdateThing",
+        "iot:DeleteThing",
+        "iot:CreateThingType",
+        "iot:DeprecateThingType",
+        "iot:DeleteThingType",
+        "iot:CreateThingGroup",
+        "iot:UpdateThingGroup",
+        "iot:DeleteThingGroup",
+        "iot:CreatePolicy",
+        "iot:DeletePolicy",
+        "iot:CreatePolicyVersion",
+        "iot:DeletePolicyVersion",
+        "iot:SetDefaultPolicyVersion",
+        "iot:CreateTopicRule",
+        "iot:ReplaceTopicRule",
+        "iot:DeleteTopicRule",
+        "iot:EnableTopicRule",
+        "iot:DisableTopicRule",
+        "iot:CreateRoleAlias",
+        "iot:UpdateRoleAlias",
+        "iot:DeleteRoleAlias",
+        "iot:CreateProvisioningTemplate",
+        "iot:UpdateProvisioningTemplate",
+        "iot:DeleteProvisioningTemplate",
+        "iot:CreateProvisioningClaim",
+        "iot:TagResource",
+        "iot:UntagResource"
+      ],
+      "Resource": [
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:thing/${STACK_BASE}-*-dev",
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:thing/${STACK_BASE}-*-test",
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:thinggroup/${STACK_BASE}-*-dev",
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:thinggroup/${STACK_BASE}-*-test",
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:thingtype/${STACK_BASE}-*-dev",
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:thingtype/${STACK_BASE}-*-test",
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:policy/${STACK_BASE}-*-dev",
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:policy/${STACK_BASE}-*-test",
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:rule/${STACK_BASE}_*_dev",
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:rule/${STACK_BASE}_*_test",
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:rolealias/${STACK_BASE}-*-dev",
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:rolealias/${STACK_BASE}-*-test",
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:provisioningtemplate/${STACK_BASE}-*-dev",
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:provisioningtemplate/${STACK_BASE}-*-test"
+      ]
+    },
+    {
+      "Sid": "IoTAttachmentsAndMemberships",
+      "Effect": "Allow",
+      "Action": [
+        "iot:AttachPolicy",
+        "iot:DetachPolicy",
+        "iot:AttachPrincipalPolicy",
+        "iot:DetachPrincipalPolicy",
+        "iot:AttachThingPrincipal",
+        "iot:DetachThingPrincipal",
+        "iot:AddThingToThingGroup",
+        "iot:RemoveThingFromThingGroup"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "IoTCertificatesBroad",
+      "Effect": "Allow",
+      "Action": [
+        "iot:CreateKeysAndCertificate",
+        "iot:CreateCertificateFromCsr",
+        "iot:RegisterCertificateWithoutCA",
+        "iot:UpdateCertificate",
+        "iot:DeleteCertificate"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "PassIoTRulesRoleDevTest",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": [
+        "arn:aws:iam::${ACCOUNT_ID}:role/IoT-rules-role-${STACK_BASE}-dev",
+        "arn:aws:iam::${ACCOUNT_ID}:role/IoT-rules-role-${STACK_BASE}-test"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "iot.amazonaws.com"
+        }
+      }
+    },
+    {
+      "Sid": "PassIoTOtaServiceRoleDevTest",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": [
+        "arn:aws:iam::${ACCOUNT_ID}:role/*${STACK_BASE}*-ota*-dev*",
+        "arn:aws:iam::${ACCOUNT_ID}:role/*${STACK_BASE}*-ota*-test*",
+        "arn:aws:iam::${ACCOUNT_ID}:role/*${STACK_BASE}*-OTA*-dev*",
+        "arn:aws:iam::${ACCOUNT_ID}:role/*${STACK_BASE}*-OTA*-test*",
+        "arn:aws:iam::${ACCOUNT_ID}:role/*ota*${STACK_BASE}*-dev*",
+        "arn:aws:iam::${ACCOUNT_ID}:role/*ota*${STACK_BASE}*-test*",
+        "arn:aws:iam::${ACCOUNT_ID}:role/*OTA*${STACK_BASE}*-dev*",
+        "arn:aws:iam::${ACCOUNT_ID}:role/*OTA*${STACK_BASE}*-test*"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "iot.amazonaws.com"
+        }
+      }
+    },
+    {
+      "Sid": "OtaConsoleIntegrations",
+      "Effect": "Allow",
+      "Action": [
+        "acm:ListCertificates",
+        "acm:DescribeCertificate",
+        "acm:GetCertificate",
+        "signer:ListSigningProfiles",
+        "signer:GetSigningProfile",
+        "signer:StartSigningJob",
+        "signer:ListSigningJobs",
+        "signer:DescribeSigningJob"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "ConsoleHelpersReadOnly",
+      "Effect": "Allow",
+      "Action": [
+        "iam:ListRoles",
+        "iam:GetRole",
+        "lambda:ListFunctions",
+        "lambda:GetFunction",
+        "lambda:ListVersionsByFunction"
+      ],
+      "Resource": "*"
+    }
+  ]
+}

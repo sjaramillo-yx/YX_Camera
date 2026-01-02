@@ -4,21 +4,25 @@ set -euo pipefail
 usage() {
   cat <<'EOF'
 Usage:
-  ./bootstrap.sh <stack-base> [options]
+  ./create.sh <stack-base> [options]
 
 Required:
   <stack-base>           Base stack name (e.g. "foo")
 
 Options:
+  --profile <profile>  AWS CLI profile (default: AWS_PROFILE if set)
   --region <region>      AWS region (default: sa-east-1)
+  --artifact-bucket <b>  S3 bucket for CloudFormation artifacts (default: cfn-artifacts-${ACCOUNT_ID}-${REGION})
+  --user-policy <file>   JSON IAM policy to attach inline to created user(s)
+                         (default: policies/yxcam-user-policy.json)
   --dev-user <name>      IAM user for developers (or set DEV_USER env var)
   --pm-user <name>       OPTIONAL: IAM user for product manager (enables prod deployer role/policy)
   --no-access-keys       Do not create access keys for users
   -h, --help             Show this help
 
 Examples:
-  DEV_USER=dev.simon ./bootstrap.sh foo
-  ./bootstrap.sh foo --dev-user dev.simon --pm-user pm.maria
+  DEV_USER=dev.simon ./create.sh foo
+  ./create.sh foo --dev-user dev.simon --pm-user pm.maria
 EOF
 }
 
@@ -26,6 +30,9 @@ EOF
 # Args
 # -----------------------------
 REGION="sa-east-1"
+PROFILE="${AWS_PROFILE:-}"
+ARTIFACT_BUCKET="${CFN_ARTIFACT_BUCKET:-}"
+USER_POLICY_FILE="${USER_POLICY_FILE:-}"
 STACK_BASE=""
 DEV_USER="${DEV_USER:-}"
 PM_USER="${PM_USER:-}"
@@ -41,8 +48,14 @@ shift
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --profile)
+      PROFILE="$2"; shift 2 ;;
     --region)
       REGION="$2"; shift 2 ;;
+    --artifact-bucket)
+      ARTIFACT_BUCKET="$2"; shift 2 ;;
+    --user-policy)
+      USER_POLICY_FILE="$2"; shift 2 ;;
     --dev-user)
       DEV_USER="$2"; shift 2 ;;
     --pm-user)
@@ -64,11 +77,34 @@ if [[ -z "${DEV_USER}" ]]; then
 fi
 
 ACCOUNT_ID="$(aws sts get-caller-identity --query Account --output text)"
-export ACCOUNT_ID REGION STACK_BASE DEV_USER PM_USER
+
+# Default artifacts bucket naming matches deploy.sh
+if [[ -z "${ARTIFACT_BUCKET}" ]]; then
+  ARTIFACT_BUCKET="cfn-artifacts-${ACCOUNT_ID}-${REGION}"
+fi
+export ACCOUNT_ID REGION ARTIFACT_BUCKET STACK_BASE DEV_USER PM_USER PROFILE
+
+# Common AWS CLI args (used for region/profile aware calls like S3)
+AWS_ARGS=()
+if [[ -n "${PROFILE}" ]]; then
+  AWS_ARGS+=(--profile "${PROFILE}")
+fi
+AWS_ARGS+=(--region "${REGION}")
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RENDER_DIR="${ROOT_DIR}/.rendered"
 mkdir -p "${RENDER_DIR}"
+
+# Default user policy (can be overridden via USER_POLICY_FILE env var or --user-policy)
+if [[ -z "${USER_POLICY_FILE}" ]]; then
+  USER_POLICY_FILE="${ROOT_DIR}/policies/yxcam-user-policy.json"
+fi
+
+if [[ ! -f "${USER_POLICY_FILE}" ]]; then
+  echo "ERROR: User policy file not found: ${USER_POLICY_FILE}" >&2
+  echo "       Create it at policies/yxcam-user-policy.json or pass --user-policy <path>." >&2
+  exit 1
+fi
 
 log() { echo "==> $*" >&2; }
 
@@ -134,6 +170,7 @@ render_json() {
   sed \
     -e "s|\${ACCOUNT_ID}|${ACCOUNT_ID}|g" \
     -e "s|\${REGION}|${REGION}|g" \
+    -e "s|\${ARTIFACT_BUCKET}|${ARTIFACT_BUCKET}|g" \
     -e "s|\${STACK_BASE}|${STACK_BASE}|g" \
     -e "s|\${DEV_USER}|${DEV_USER}|g" \
     -e "s|\${PM_USER}|${PM_USER}|g" \
@@ -263,12 +300,30 @@ ensure_attach_role_policy() {
 
 ensure_user() {
   local user_name="$1"
+
   if aws iam get-user --user-name "${user_name}" >/dev/null 2>&1; then
     log "User exists: ${user_name}"
-  else
-    log "Creating user: ${user_name}"
-    aws iam create-user --user-name "${user_name}" >/dev/null
+    return 0
   fi
+
+  log "Creating user: ${user_name}"
+  aws iam create-user --user-name "${user_name}" >/dev/null
+
+  # IAM is eventually consistent. Wait until the user is readable before continuing
+  local attempt=1
+  local max_attempts=30
+  local sleep_s=1
+  while ! aws iam get-user --user-name "${user_name}" >/dev/null 2>&1; do
+    if (( attempt >= max_attempts )); then
+      echo "ERROR: IAM user '${user_name}' was created but is not readable after ${max_attempts} attempts." >&2
+      exit 1
+    fi
+    log "Waiting for IAM user '${user_name}' to become available... (attempt ${attempt}/${max_attempts})"
+    sleep "${sleep_s}"
+    attempt=$((attempt+1))
+    # small backoff, cap at 5s
+    if (( sleep_s < 5 )); then sleep_s=$((sleep_s+1)); fi
+  done
 }
 
 put_inline_user_policy() {
@@ -309,6 +364,7 @@ maybe_create_access_key() {
 # Main
 # -----------------------------
 log "Account: ${ACCOUNT_ID}"
+log "Profile: ${PROFILE:-"(default)"}"
 log "Region:  ${REGION}"
 log "Stack base: ${STACK_BASE}"
 log "Dev user: ${DEV_USER}"
@@ -317,6 +373,49 @@ if [[ -n "${PM_USER}" ]]; then
 else
   log "PM user:  (not set) (prod deploy disabled)"
 fi
+
+ensure_bucket() {
+  local bucket="$1"
+  local region="$2"
+
+  # If bucket exists and we can access it, this succeeds.
+  if aws "${AWS_ARGS[@]}" s3api head-bucket --bucket "$bucket" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  # If the bucket exists but we don't have access, head-bucket returns 403.
+  # Creating would then fail with a confusing error, so surface a clearer message.
+  if aws "${AWS_ARGS[@]}" s3api head-bucket --bucket "$bucket" 2>&1 | grep -q 'Forbidden'; then
+    echo "ERROR: Bucket s3://${bucket} exists but you don't have access to it (head-bucket Forbidden)." >&2
+    exit 1
+  fi
+
+  echo "==> Creating artifacts bucket: s3://$bucket (region: $region)"
+
+  if [[ "$region" == "us-east-1" ]]; then
+    aws "${AWS_ARGS[@]}" s3api create-bucket --bucket "$bucket" >/dev/null
+  else
+    aws "${AWS_ARGS[@]}" s3api create-bucket \
+      --bucket "$bucket" \
+      --create-bucket-configuration "LocationConstraint=$region" >/dev/null
+  fi
+
+  # Helpful defaults
+  aws "${AWS_ARGS[@]}" s3api put-bucket-versioning \
+    --bucket "$bucket" \
+    --versioning-configuration Status=Enabled >/dev/null
+
+  aws "${AWS_ARGS[@]}" s3api put-public-access-block \
+    --bucket "$bucket" \
+    --public-access-block-configuration \
+      BlockPublicAcls=true,IgnorePublicAcls=true,BlockPublicPolicy=true,RestrictPublicBuckets=true >/dev/null
+
+  aws "${AWS_ARGS[@]}" s3api put-bucket-encryption \
+    --bucket "$bucket" \
+    --server-side-encryption-configuration '{
+      "Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}}]
+    }' >/dev/null
+}
 
 # 1) Execution roles (always create: dev/test/prod)
 ensure_role "cfn-exec-dev"  "${ROOT_DIR}/roles/cfn-trust.json"
@@ -337,9 +436,20 @@ ensure_role "yx-deployer-devtest" "${ROOT_DIR}/roles/deployer-trust-account.json
 deployer_devtest_policy_arn="$(ensure_managed_policy "yx-deploy-devtest-policy" "${ROOT_DIR}/policies/deployer-devtest-policy.json")"
 ensure_attach_role_policy "yx-deployer-devtest" "${deployer_devtest_policy_arn}"
 
+# 3b) IoT Core dev/test permissions (CLI + Console)
+iot_devtest_policy_arn="$(ensure_managed_policy "yx-iot-devtest-policy" "${ROOT_DIR}/policies/iot-devtest-policy.json")"
+ensure_attach_role_policy "yx-deployer-devtest" "${iot_devtest_policy_arn}"
+ddb_devtest_policy_arn="$(ensure_managed_policy "yx-ddb-devtest-policy" "${ROOT_DIR}/policies/ddb-devtest-policy.json")"
+ensure_attach_role_policy "yx-deployer-devtest" "${ddb_devtest_policy_arn}"
+s3_devtest_policy_arn="$(ensure_managed_policy "yx-s3-devtest-policy" "${ROOT_DIR}/policies/s3-devtest-policy.json")"
+ensure_attach_role_policy "yx-deployer-devtest" "${s3_devtest_policy_arn}"
+
 # 4) Dev user (always)
 ensure_user "${DEV_USER}"
 ensure_console_login "${DEV_USER}"
+if [[ -n "${USER_POLICY_FILE}" ]]; then
+  put_inline_user_policy "${DEV_USER}" "YxCamUserPermissions" "${USER_POLICY_FILE}"
+fi
 put_inline_user_policy "${DEV_USER}" "AssumeYxDeployerDevTest" "${ROOT_DIR}/policies/assume-deployer-devtest.json"
 ensure_role "yx-deployer-devtest" "${ROOT_DIR}/roles/deployer-trust-user.json" "${DEV_USER}"
 maybe_create_access_key "${DEV_USER}"
@@ -351,11 +461,18 @@ if [[ -n "${PM_USER}" ]]; then
   ensure_attach_role_policy "yx-deployer-prod" "${deployer_prod_policy_arn}"
 
   ensure_user "${PM_USER}"
+  ensure_console_login "${PM_USER}"
+  if [[ -n "${USER_POLICY_FILE}" ]]; then
+    put_inline_user_policy "${PM_USER}" "YxCamUserPermissions" "${USER_POLICY_FILE}"
+  fi
   put_inline_user_policy "${PM_USER}" "AssumeYxDeployerProd" "${ROOT_DIR}/policies/assume-deployer-prod.json"
   ensure_role "yx-deployer-prod" "${ROOT_DIR}/roles/deployer-trust-user.json" "${PM_USER}"
   maybe_create_access_key "${PM_USER}"
 else
   log "Skipping prod deployer role + PM user (no --pm-user provided)."
 fi
+
+# 6) Create the CloudFormation artifact bucket 
+ensure_bucket "${ARTIFACT_BUCKET}" "${REGION}"
 
 log "Done."
