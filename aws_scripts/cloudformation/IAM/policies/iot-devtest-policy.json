@@ -36,8 +36,8 @@
       "Effect": "Allow",
       "Action": "iot:Publish",
       "Resource": [
-        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:topic/${STACK_NAME}/dev/*",
-        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:topic/${STACK_NAME}/test/*"
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:topic/${STACK_BASE}/dev/*",
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:topic/${STACK_BASE}/test/*"
       ]
     },
     {
@@ -45,8 +45,8 @@
       "Effect": "Allow",
       "Action": "iot:Subscribe",
       "Resource": [
-        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:topicfilter/${STACK_NAME}/dev/*",
-        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:topicfilter/${STACK_NAME}/test/*"
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:topicfilter/${STACK_BASE}/dev/*",
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:topicfilter/${STACK_BASE}/test/*"
       ]
     },
     {
@@ -54,8 +54,8 @@
       "Effect": "Allow",
       "Action": "iot:Receive",
       "Resource": [
-        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:topic/${STACK_NAME}/dev/*",
-        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:topic/${STACK_NAME}/test/*"
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:topic/${STACK_BASE}/dev/*",
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:topic/${STACK_BASE}/test/*"
       ]
     },
     {
@@ -131,7 +131,8 @@
         "iot:CreateCertificateFromCsr",
         "iot:RegisterCertificateWithoutCA",
         "iot:UpdateCertificate",
-        "iot:DeleteCertificate"
+        "iot:DeleteCertificate",
+        "iot:DescribeCertificate"
       ],
       "Resource": "*"
     },
