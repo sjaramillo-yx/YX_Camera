@@ -51,7 +51,7 @@ Resources:
           Resource: !Sub arn:aws:iot:*:*:topic/${ParentStackName}/${Environment}/uploads/${!iot:Connection.Thing.ThingName}/*
         - Effect: Allow
           Action: iot:Publish
-          Resource: !Sub arn:aws:iot:*:*:topic/${ParentStackName}/${Environment}/uploads/${!iot:Connection.Thing.ThingName}/*z
+          Resource: !Sub arn:aws:iot:*:*:topic/${ParentStackName}/${Environment}/uploads/${!iot:Connection.Thing.ThingName}/*
 
   IoTProvisionerRole:
     Type: AWS::IAM::Role
