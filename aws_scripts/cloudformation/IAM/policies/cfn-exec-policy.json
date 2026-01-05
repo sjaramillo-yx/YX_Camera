@@ -41,7 +41,9 @@
       ],
       "Resource": [
         "arn:aws:iam::${ACCOUNT_ID}:role/*-${ENV}",
-        "arn:aws:iam::${ACCOUNT_ID}:role/*-${ENV}-*"
+        "arn:aws:iam::${ACCOUNT_ID}:role/*-${ENV}-*",
+        "arn:aws:iam::${ACCOUNT_ID}:role/*-${ENV_GROUP}",
+        "arn:aws:iam::${ACCOUNT_ID}:role/*-${ENV_GROUP}-*"
       ]
     },
     {

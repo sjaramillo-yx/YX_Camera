@@ -13,6 +13,9 @@ Parameters:
   LowercaseStackName:
     Type: String
 
+Conditions:
+  IsProd: !Equals [!Ref Environment, prod]
+
 Resources:
   DynamoStack:
     Type: AWS::CloudFormation::Stack
@@ -20,7 +23,7 @@ Resources:
       TemplateURL: nested/dynamoDB.yaml
       Parameters:
         ParentStackName: !Select [0, !Split ["-", !Ref "AWS::StackName"]]  # foo
-        Environment:    !Select [1, !Split ["-", !Ref "AWS::StackName"]]  # dev
+        Environment: !Ref Environment
 
   IoTRulesStack:
     Type: AWS::CloudFormation::Stack
@@ -29,7 +32,7 @@ Resources:
       TemplateURL: nested/IoTRules.yaml
       Parameters:
         ParentStackName: !Select [0, !Split ["-", !Ref "AWS::StackName"]]  # foo
-        Environment:    !Select [1, !Split ["-", !Ref "AWS::StackName"]]  # dev
+        Environment: !Ref Environment
         DynamoTableName: !GetAtt DynamoStack.Outputs.TableName
         DynamoTableArn: !GetAtt DynamoStack.Outputs.TableArn
         DynamoRoleArn: !GetAtt DynamoStack.Outputs.IoTRuleRoleArn
@@ -40,7 +43,7 @@ Resources:
       TemplateURL: nested/IoTCore.yaml
       Parameters:
         ParentStackName: !Select [0, !Split ["-", !Ref "AWS::StackName"]]  # foo
-        Environment:    !Select [1, !Split ["-", !Ref "AWS::StackName"]]  # dev
+        Environment: !Ref Environment
   
   S3Stack:
     Type: AWS::CloudFormation::Stack
@@ -49,7 +52,7 @@ Resources:
       Parameters:
         ParentStackName: !Select [0, !Split ["-", !Ref "AWS::StackName"]]  # Foo
         LowercaseStackName: !Ref LowercaseStackName                        # foo
-        Environment:    !Select [1, !Split ["-", !Ref "AWS::StackName"]]  # dev
+        Environment: !Ref Environment
   
   AppSyncStack:
     Type: AWS::CloudFormation::Stack
@@ -58,10 +61,11 @@ Resources:
       TemplateURL: nested/appSync.yaml
       Parameters:
         ParentStackName: !Select [0, !Split ["-", !Ref "AWS::StackName"]]  # foo
-        Environment:    !Select [1, !Split ["-", !Ref "AWS::StackName"]]  # dev
+        Environment: !Ref Environment
         DynamoTableName: !GetAtt DynamoStack.Outputs.TableName
         DynamoTableArn: !GetAtt DynamoStack.Outputs.TableArn
         # AuthType: AWS_IAM # optional (or API_KEY)
+        AppSyncManagerRoleName: !If [IsProd, "yx-deployer-prod", "yx-deployer-devtest"]
 
 
 Outputs:

@@ -23,6 +23,11 @@ Parameters:
       - AWS_IAM
       - API_KEY
     Description: Primary AppSync auth mode.
+  
+  AppSyncManagerRoleName:
+    Type: String
+    Description: Existing IAM Role name to grant AppSync management + query execution for this API.
+
 
 Conditions:
   UseApiKeyAuth: !Equals [!Ref AuthType, API_KEY]
@@ -428,6 +433,100 @@ Resources:
 
           return { items: mapped, nextToken };
         }
+
+  AppSyncManagerPolicy:
+    Type: AWS::IAM::Policy
+    Properties:
+      PolicyName: !Sub "${ParentStackName}-appsync-manage-${Environment}"
+      Roles:
+        - !Ref AppSyncManagerRoleName
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ListApisConsoleFriendly
+            Effect: Allow
+            Action:
+              - appsync:ListGraphqlApis
+              - appsync:ListApiKeys
+              - appsync:ListDataSources
+              - appsync:ListFunctions
+              - appsync:ListResolvers
+              - appsync:ListTypes
+              - appsync:ListTagsForResource
+            Resource: "*"
+
+          - Sid: ManageThisAppSyncApi
+            Effect: Allow
+            Action:
+              - appsync:GetGraphqlApi
+              - appsync:UpdateGraphqlApi
+              - appsync:DeleteGraphqlApi
+
+              - appsync:GetIntrospectionSchema
+              - appsync:SetIntrospectionSchema
+
+              - appsync:GetSchemaCreationStatus
+              - appsync:StartSchemaCreation
+
+              - appsync:GetType
+              - appsync:CreateType
+              - appsync:UpdateType
+              - appsync:DeleteType
+
+              - appsync:GetDataSource
+              - appsync:CreateDataSource
+              - appsync:UpdateDataSource
+              - appsync:DeleteDataSource
+
+              - appsync:GetFunction
+              - appsync:CreateFunction
+              - appsync:UpdateFunction
+              - appsync:DeleteFunction
+
+              - appsync:GetResolver
+              - appsync:CreateResolver
+              - appsync:UpdateResolver
+              - appsync:DeleteResolver
+
+              - appsync:CreateApiKey
+              - appsync:DeleteApiKey
+              - appsync:UpdateApiKey
+
+              - appsync:TagResource
+              - appsync:UntagResource
+            Resource:
+              - !Sub
+                - "arn:aws:appsync:${AWS::Region}:${AWS::AccountId}:apis/${ApiId}"
+                - { ApiId: !GetAtt GraphQLApi.ApiId }
+              - !Sub
+                - "arn:aws:appsync:${AWS::Region}:${AWS::AccountId}:apis/${ApiId}/*"
+                - { ApiId: !GetAtt GraphQLApi.ApiId }
+
+          - Sid: ExecuteGraphQLOnThisApi
+            Effect: Allow
+            Action: appsync:GraphQL
+            Resource: !Sub
+              - "arn:aws:appsync:${AWS::Region}:${AWS::AccountId}:apis/${ApiId}/types/*/fields/*"
+              - { ApiId: !GetAtt GraphQLApi.ApiId }
+
+          - Sid: PassOnlyAppSyncServiceRolesIfNeeded
+            Effect: Allow
+            Action: iam:PassRole
+            Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/*"
+            Condition:
+              StringEquals:
+                iam:PassedToService: appsync.amazonaws.com
+          
+          - Sid: ApiKeyManagementGlobal
+            Effect: Allow
+            Action:
+              - appsync:CreateApiKey
+              - appsync:UpdateApiKey
+              - appsync:DeleteApiKey
+            Resource: "*"
+
+
+    
 Outputs:
   ApiId:
     Value: !GetAtt GraphQLApi.ApiId

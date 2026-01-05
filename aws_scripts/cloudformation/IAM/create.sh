@@ -170,6 +170,13 @@ render_json() {
   local user_name="${3:-}"
   local env_name="${4:-}"
 
+  # env_name is one of: dev | test | prod
+  case "${env_name}" in
+    "dev"|"test") ENV_GROUP="devtest" ;;
+    "prod")     ENV_GROUP="prod" ;;
+  esac
+  ENV_GROUP=${ENV_GROUP:-}
+
   # Using | delimiter to avoid escaping / in ARNs
   sed \
     -e "s|\${ACCOUNT_ID}|${ACCOUNT_ID}|g" \
@@ -181,6 +188,7 @@ render_json() {
     -e "s|\${PM_USER}|${PM_USER}|g" \
     -e "s|\${USER_NAME}|${user_name}|g" \
     -e "s|\${ENV}|${env_name}|g" \
+    -e "s|\${ENV_GROUP}|${ENV_GROUP}|g" \
     "${in_file}" > "${out_file}"
 
   python -m json.tool "${out_file}" >/dev/null
