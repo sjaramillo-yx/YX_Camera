@@ -15,6 +15,50 @@
       "Resource": "*"
     },
     {
+      "Sid": "DescribeIoTEndpoint",
+      "Effect": "Allow",
+      "Action": "iot:DescribeEndpoint",
+      "Resource": "*"
+    },
+    {
+      "Sid": "ConnectWithTestClientId",
+      "Effect": "Allow",
+      "Action": "iot:Connect",
+      "Resource": "arn:aws:iot:${REGION}:${ACCOUNT_ID}:client/*",
+      "Condition": {
+        "StringLike": {
+          "iot:ClientId": "iotconsole-*"
+        }
+      }
+    },
+    {
+      "Sid": "PublishToTestTopics",
+      "Effect": "Allow",
+      "Action": "iot:Publish",
+      "Resource": [
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:topic/${STACK_NAME}/dev/*",
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:topic/${STACK_NAME}/test/*"
+      ]
+    },
+    {
+      "Sid": "SubscribeToTestTopicFilters",
+      "Effect": "Allow",
+      "Action": "iot:Subscribe",
+      "Resource": [
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:topicfilter/${STACK_NAME}/dev/*",
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:topicfilter/${STACK_NAME}/test/*"
+      ]
+    },
+    {
+      "Sid": "ReceiveFromTestTopics",
+      "Effect": "Allow",
+      "Action": "iot:Receive",
+      "Resource": [
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:topic/${STACK_NAME}/dev/*",
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:topic/${STACK_NAME}/test/*"
+      ]
+    },
+    {
       "Sid": "IoTManageDevTestNamedResources",
       "Effect": "Allow",
       "Action": [
