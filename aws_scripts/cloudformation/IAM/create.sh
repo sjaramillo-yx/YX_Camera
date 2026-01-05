@@ -45,6 +45,7 @@ fi
 
 STACK_BASE="$1"
 shift
+LOWERCASE_STACK_BASE="${STACK_BASE,,}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -172,6 +173,7 @@ render_json() {
     -e "s|\${REGION}|${REGION}|g" \
     -e "s|\${ARTIFACT_BUCKET}|${ARTIFACT_BUCKET}|g" \
     -e "s|\${STACK_BASE}|${STACK_BASE}|g" \
+    -e "s|\${LOWERCASE_STACK_BASE}|${LOWERCASE_STACK_BASE}|g" \
     -e "s|\${DEV_USER}|${DEV_USER}|g" \
     -e "s|\${PM_USER}|${PM_USER}|g" \
     -e "s|\${USER_NAME}|${user_name}|g" \

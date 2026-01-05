@@ -20,6 +20,7 @@ EOF
 }
 
 BASE_STACK_NAME="${1:-}"
+LOWERCASE_STACK_BASE="${BASE_STACK_NAME,,}"
 ENVIRONMENT="${2:-}"
 shift 2 || true
 STACK_NAME="${BASE_STACK_NAME}-${ENVIRONMENT}"
@@ -251,7 +252,7 @@ aws "${AWS_ARGS[@]}" cloudformation deploy \
   --stack-name "$STACK_NAME" \
   --template-file "$PACKAGED_TEMPLATE" \
   --capabilities CAPABILITY_NAMED_IAM \
-  --parameter-overrides Environment="$ENVIRONMENT" \
+  --parameter-overrides Environment="$ENVIRONMENT" LowercaseStackName="$LOWERCASE_STACK_BASE" \
   --role-arn "$CFN_EXEC_ROLE_ARN" \
   --no-fail-on-empty-changeset
 

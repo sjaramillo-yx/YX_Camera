@@ -9,6 +9,9 @@ Parameters:
       - dev
       - test
       - prod
+  
+  LowercaseStackName:
+    Type: String
 
 Resources:
   DynamoStack:
@@ -44,7 +47,8 @@ Resources:
     Properties:
       TemplateURL: nested/S3.yaml
       Parameters:
-        ParentStackName: !Select [0, !Split ["-", !Ref "AWS::StackName"]]  # foo
+        ParentStackName: !Select [0, !Split ["-", !Ref "AWS::StackName"]]  # Foo
+        LowercaseStackName: !Ref LowercaseStackName                        # foo
         Environment:    !Select [1, !Split ["-", !Ref "AWS::StackName"]]  # dev
   
   AppSyncStack:

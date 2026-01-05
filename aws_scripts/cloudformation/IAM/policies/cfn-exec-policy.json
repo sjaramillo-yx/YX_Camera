@@ -202,7 +202,7 @@
         "s3:PutBucketAcl"
       ],
       "Resource": [
-        "arn:aws:s3:::${STACK_BASE}-${ENV}-${ACCOUNT_ID}-${REGION}-camera-data"
+        "arn:aws:s3:::${LOWERCASE_STACK_BASE}-${ENV}-${ACCOUNT_ID}-${REGION}-camera-data"
       ]
     },
     {
