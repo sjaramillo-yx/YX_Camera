@@ -5,6 +5,7 @@
       "Sid": "ListApisConsoleFriendly",
       "Effect": "Allow",
       "Action": [
+        "appsync:ListApis",
         "appsync:ListGraphqlApis",
         "appsync:ListApiKeys",
         "appsync:ListDataSources",
@@ -55,6 +56,12 @@
         "arn:aws:appsync:${REGION}:${ACCOUNT_ID}:apis/${STACK_BASE}-camera-db-api-test",
         "arn:aws:appsync:${REGION}:${ACCOUNT_ID}:apis/${STACK_BASE}-camera-db-api-test/*"
       ]
+    },
+    {
+      "Sid": "ExecuteGraphQLQueriesOnAllApis",
+      "Effect": "Allow",
+      "Action": "appsync:GraphQL",
+      "Resource": "arn:aws:appsync:${REGION}:${ACCOUNT_ID}:apis/*/types/Query/fields/*"
     },
     {
       "Sid": "PassOnlyAppSyncServiceRolesIfNeeded",
