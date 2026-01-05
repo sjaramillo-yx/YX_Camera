@@ -10,6 +10,7 @@
 #include "nvs_manager.h"
 #include "provision_claimer.h"
 #include "recording_worker.h"
+#include "s3_uploader.h"
 
 static const char *TAG = "MQTT Worker"; /**< Logging tag for this module. */
 
@@ -84,6 +85,8 @@ static void mqtt_connected_handler(void *handler_args, esp_event_base_t base, in
   snprintf(topic_name, 1024, CONFIG_PROJ_BASE_NAME "/" CONFIG_PROJ_ENV_NAME "/recordings/%s/start",
            mqtt_cert_data.thing_name);
   esp_mqtt_client_subscribe(client, topic_name, 0);
+  // Connect the S3 uploader
+  s3_uploader_on_connected();
   // Give the initialization semaphore
   xSemaphoreGive(mqtt_init_semphr);
 }
@@ -153,6 +156,17 @@ static void mqtt_data_handler(void *handler_args, esp_event_base_t base, int32_t
       esp_event_post_to(rec_event_h, RECORDING_EVENTS, REC_STOP, (void *)rec_stop_id,
                         sizeof(rec_stop_id), 100);
     }
+    goto cleanup;
+  }
+
+  /* -- Upload start command --*/
+  snprintf(topic_name, 1024, CONFIG_PROJ_BASE_NAME "/" CONFIG_PROJ_ENV_NAME "/uploads/%s/start",
+           mqtt_cert_data.thing_name);
+  if (!strcmp(received_topic, topic_name)) {
+    /// TODO: Handle payload being sent in multiple events
+    ESP_LOGD(TAG, "Passing %s to s3 uploader handler", received_topic);
+    s3_uploader_handler(received_topic, event->data, event->data_len);
+
     goto cleanup;
   }
 cleanup:
@@ -294,6 +308,14 @@ esp_err_t mqttworker_begin(void) {
   rec_eventloop_get_handle(&rec_event_h);
   ESP_ERROR_CHECK(esp_event_handler_instance_register_with(
       rec_event_h, RECORDING_EVENTS, ESP_EVENT_ANY_ID, mqttworker_rec_handler, NULL, NULL));
+  /* Initialize the uploader */
+  s3uploader_cfg_t up_cfg = {
+      .thing_name       = mqtt_cert_data.thing_name,
+      .rec_dir          = "videos",
+      .http_timeout_ms  = 20000,
+      .http_put_retries = 3,
+  };
+  ESP_ERROR_CHECK(s3uploader_init(client, &up_cfg));
   /* Start MQTT event loop */
   esp_mqtt_client_start(client);
   /* Wait for the client to stablish a connection */

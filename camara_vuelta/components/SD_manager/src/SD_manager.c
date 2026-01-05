@@ -2,7 +2,7 @@
 
 #define ALIGN_UP(num, align) (((num) + ((align) - 1)) & ~((align) - 1))
 
-static const char *TAG = "SD Card Manager" /**< Logging tag for this module. */;
+static const char *TAG = "SDManager" /**< Logging tag for this module. */;
 
 /* ================ STRUCTS ================ */
 typedef struct {
@@ -115,6 +115,26 @@ esp_err_t sdman_open_file(char *filename, char *mode, FILE **file_handle) {
   }
 
   return ESP_OK;
+}
+
+esp_err_t sdman_stat_file(char *filename, size_t *file_size) {
+  ESP_LOGV(TAG, "Stating file %s", filename);
+  FILINFO file_info;
+  FRESULT res = f_stat(filename, &file_info);
+  ESP_LOGV(TAG, "Stat result is %d", (int)res);
+  if (res == FR_OK) {
+    if (file_size != NULL)
+      *file_size = (size_t)file_info.fsize;
+    return ESP_OK;
+  } else if (res == FR_INVALID_NAME) {
+    ESP_LOGE(TAG, "(%s) Invalid filename: %s", __func__, filename);
+    return ESP_ERR_INVALID_ARG;
+  } else if (res == FR_NO_FILE) {
+    ESP_LOGE(TAG, "(%s) File not found: %s", __func__, filename);
+    return ESP_ERR_NOT_FOUND;
+  }
+  ESP_LOGE(TAG, "(%s) Failed with error code %d", __func__, res);
+  return ESP_FAIL;
 }
 
 esp_err_t sdman_getJSON(cJSON **sdJSON) {
