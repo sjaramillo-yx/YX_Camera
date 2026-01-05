@@ -183,6 +183,17 @@
       "Resource": "*"
     },
     {
+      "Sid": "AllowCreateAppSyncServiceLinkedRole",
+      "Effect": "Allow",
+      "Action": "iam:CreateServiceLinkedRole",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "iam:AWSServiceName": "appsync.amazonaws.com"
+        }
+      }
+    },
+    {
       "Sid": "S3CreateBucket",
       "Effect": "Allow",
       "Action": "s3:CreateBucket",
