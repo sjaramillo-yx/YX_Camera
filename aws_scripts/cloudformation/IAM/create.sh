@@ -18,6 +18,7 @@ Options:
   --dev-user <name>      IAM user for developers (or set DEV_USER env var)
   --pm-user <name>       OPTIONAL: IAM user for product manager (enables prod deployer role/policy)
   --no-access-keys       Do not create access keys for users
+  --reset-console-login  Reset existing console login password(s) and force password reset
   -h, --help             Show this help
 
 Examples:
@@ -37,6 +38,7 @@ STACK_BASE=""
 DEV_USER="${DEV_USER:-}"
 PM_USER="${PM_USER:-}"
 CREATE_ACCESS_KEYS="true"
+RESET_CONSOLE_LOGIN="false"
 
 if [[ $# -lt 1 ]]; then
   usage
@@ -63,6 +65,8 @@ while [[ $# -gt 0 ]]; do
       PM_USER="$2"; shift 2 ;;
     --no-access-keys)
       CREATE_ACCESS_KEYS="false"; shift ;;
+    --reset-console-login)
+      RESET_CONSOLE_LOGIN="true"; shift ;;
     -h|--help)
       usage; exit 0 ;;
     *)
@@ -136,28 +140,27 @@ ensure_console_login() {
   local pw_file="${RENDER_DIR}/${user_name}.console-password.txt"
 
   if aws iam get-login-profile --user-name "${user_name}" >/dev/null 2>&1; then
-    log "Console login profile exists for ${user_name} (resetting password + forcing reset)"
+    if [[ "${RESET_CONSOLE_LOGIN}" != "true" ]]; then
+      log "Console login profile exists for ${user_name} (leaving unchanged; pass --reset-console-login to reset)"
+      return 0
+    fi
+
+    log "Resetting console login password for ${user_name} (forcing password reset)"
     local tmp_pw
     tmp_pw="$(generate_temp_password)"
-    aws iam update-login-profile \
-      --user-name "${user_name}" \
-      --password "${tmp_pw}" \
-      --password-reset-required >/dev/null
+    aws iam update-login-profile       --user-name "${user_name}"       --password "${tmp_pw}"       --password-reset-required >/dev/null
     umask 177
     printf "%s\n" "${tmp_pw}" > "${pw_file}"
+    log "Saved TEMP console password to: ${pw_file} (chmod 600)"
   else
     log "Creating console login profile for ${user_name} (forcing password reset)"
     local tmp_pw
     tmp_pw="$(generate_temp_password)"
-    aws iam create-login-profile \
-      --user-name "${user_name}" \
-      --password "${tmp_pw}" \
-      --password-reset-required >/dev/null
+    aws iam create-login-profile       --user-name "${user_name}"       --password "${tmp_pw}"       --password-reset-required >/dev/null
     umask 177
     printf "%s\n" "${tmp_pw}" > "${pw_file}"
+    log "Saved TEMP console password to: ${pw_file} (chmod 600)"
   fi
-
-  log "Saved TEMP console password to: ${pw_file} (chmod 600)"
 }
 
 
