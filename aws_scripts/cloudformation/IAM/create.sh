@@ -464,7 +464,6 @@ if [[ -n "${USER_POLICY_FILE}" ]]; then
   put_inline_user_policy "${DEV_USER}" "YxCamUserPermissions" "${USER_POLICY_FILE}"
 fi
 put_inline_user_policy "${DEV_USER}" "AssumeYxDeployerDevTest" "${ROOT_DIR}/policies/assume-deployer-devtest.json"
-ensure_role "yx-deployer-devtest" "${ROOT_DIR}/roles/deployer-trust-user.json" "${DEV_USER}"
 maybe_create_access_key "${DEV_USER}"
 
 # 5) Prod deployer role + PM user (optional)
