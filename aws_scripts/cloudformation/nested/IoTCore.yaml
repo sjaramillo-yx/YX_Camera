@@ -134,7 +134,7 @@ Resources:
                   "Fn::Join": [
                     "",
                     [
-                      "VueltaCam_",
+                      "${ParentStackName}_${Environment}_",
                       {
                         "Ref": "SerialNumber"
                       }
