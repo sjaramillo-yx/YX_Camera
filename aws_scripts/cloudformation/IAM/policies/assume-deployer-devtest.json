@@ -3,10 +3,8 @@
   "Statement": [
     {
       "Effect": "Allow",
-      "Principal": {
-        "AWS": "arn:aws:iam::${ACCOUNT_ID}:root"
-      },
-      "Action": "sts:AssumeRole"
+      "Action": "sts:AssumeRole",
+      "Resource": "arn:aws:iam::${ACCOUNT_ID}:role/yx-deployer-devtest"
     }
   ]
 }

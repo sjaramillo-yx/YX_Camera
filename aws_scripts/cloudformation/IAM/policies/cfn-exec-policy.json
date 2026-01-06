@@ -72,7 +72,8 @@
         "cloudformation:GetTemplateSummary"
       ],
       "Resource": [
-        "arn:aws:cloudformation:${REGION}:${ACCOUNT_ID}:stack/${STACK_BASE}-${ENV}-*/*"
+        "arn:aws:cloudformation:${REGION}:${ACCOUNT_ID}:stack/${STACK_BASE}-${ENV}-*/*",
+        "arn:aws:cloudformation:${REGION}:${ACCOUNT_ID}:stack/${STACK_BASE}-${ENV}/*"
       ]
     },
     {
