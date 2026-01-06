@@ -148,6 +148,21 @@
       "Resource": "*"
     },
     {
+      "Sid": "IamDeleteIotProvisionerRole",
+      "Effect": "Allow",
+      "Action": [
+        "iam:GetRole",
+        "iam:DeleteRole",
+        "iam:ListRolePolicies",
+        "iam:DeleteRolePolicy",
+        "iam:ListAttachedRolePolicies",
+        "iam:DetachRolePolicy",
+        "iam:ListInstanceProfilesForRole",
+        "iam:RemoveRoleFromInstanceProfile"
+      ],
+      "Resource": "arn:aws:iam::${ACCOUNT_ID}:role/IoT-provisioner-role-${STACK_BASE}-${ENVIRONMENT}"
+    },
+    {
       "Sid": "AppSyncScoped",
       "Effect": "Allow",
       "Action": [

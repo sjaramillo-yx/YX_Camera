@@ -36,6 +36,26 @@
         "arn:aws:s3:::*-dev-${ACCOUNT_ID}-${REGION}-camera-data/*",
         "arn:aws:s3:::*-test-${ACCOUNT_ID}-${REGION}-camera-data/*"
       ]
+    },
+    {
+      "Sid": "S3DeleteEnvCameraDataBucket",
+      "Effect": "Allow",
+      "Action": [
+        "s3:DeleteBucket",
+        "s3:ListBucket",
+        "s3:ListBucketVersions"
+      ],
+      "Resource": "arn:aws:s3:::${LOWERCASE_STACK_BASE}-${ENV}-${ACCOUNT_ID}-${REGION}-camera-data"
+    },
+    {
+      "Sid": "S3DeleteEnvCameraDataBucketObjects",
+      "Effect": "Allow",
+      "Action": [
+        "s3:DeleteObject",
+        "s3:DeleteObjectVersion",
+        "s3:AbortMultipartUpload"
+      ],
+      "Resource": "arn:aws:s3:::${LOWERCASE_STACK_BASE}-${ENV}-${ACCOUNT_ID}-${REGION}-camera-data/*"
     }
   ]
 }
