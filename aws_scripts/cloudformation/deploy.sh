@@ -186,7 +186,7 @@ zip_lambdas() {
   for dir in "${dirs[@]}"; do
     local name zip_path
     name="$(basename "$dir")"
-    zip_path="${dir}/${name}.zip"
+    zip_path="${dir}.zip"
 
     echo "==> Zipping lambda: ${dir} -> ${zip_path}"
     rm -f "$zip_path"
@@ -196,8 +196,8 @@ zip_lambdas() {
 
       # Don't let strict mode kill the whole deploy if zip returns "nothing to do"
       set +e
-      zip -qr "${name}.zip" . \
-        -x "${name}.zip" \
+      zip -qr "../${name}.zip" . \
+        -x "${dir}.zip" \
         -x '__pycache__/*' \
         -x '*.pyc' \
         -x '.pytest_cache/*' \
