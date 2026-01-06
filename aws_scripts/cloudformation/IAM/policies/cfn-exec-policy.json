@@ -138,6 +138,7 @@
         "iot:SetDefaultPolicyVersion",
         "iot:DeletePolicyVersion",
         "iot:CreateProvisioningTemplate",
+        "iot:CreateProvisioningTemplateVersion",
         "iot:UpdateProvisioningTemplate",
         "iot:DeleteProvisioningTemplate",
         "iot:TagResource",
