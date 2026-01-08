@@ -202,7 +202,10 @@
     {
       "Sid": "AppSyncCreateDataSourceGlobal",
       "Effect": "Allow",
-      "Action": "appsync:CreateDataSource",
+      "Action": [
+        "appsync:CreateDataSource",
+        "appsync:UpdateDataSource"
+      ],
       "Resource": "*"
     },
     {
