@@ -68,7 +68,7 @@ Resources:
         Environment: !Ref Environment
         DynamoTableName: !GetAtt DynamoStack.Outputs.TableName
         DynamoTableArn: !GetAtt DynamoStack.Outputs.TableArn
-        # AuthType: AWS_IAM # optional (or API_KEY)
+        AuthType: API_KEY # optional (AWS_IAM or API_KEY)
         AppSyncManagerRoleName: !If [IsProd, "yx-deployer-prod", "yx-deployer-devtest"]
 
 

@@ -30,7 +30,8 @@
         "cloudformation:ListStacks",
         "cloudformation:DescribeAccountLimits",
         "cloudformation:ValidateTemplate",
-        "cloudformation:GetTemplateSummary"
+        "cloudformation:GetTemplateSummary",
+        "cloudformation:DescribeStackDriftDetectionStatus"
       ],
       "Resource": "*"
     },
@@ -47,7 +48,16 @@
         "cloudformation:Describe*",
         "cloudformation:GetTemplateSummary",
         "cloudformation:List*",
-        "cloudformation:ValidateTemplate"
+        "cloudformation:ValidateTemplate",
+        "cloudformation:DetectStackDrift",
+        "cloudformation:DetectStackResourceDrift",
+        "cloudformation:DescribeStackResourceDrifts",
+        "cloudformation:DescribeStacks",
+        "cloudformation:DescribeStackResources",
+        "cloudformation:DescribeStackResource",
+        "cloudformation:DescribeStackEvents",
+        "cloudformation:GetTemplate",
+        "cloudformation:GetTemplateSummary"
       ],
       "Resource": [
         "arn:aws:cloudformation:${REGION}:${ACCOUNT_ID}:stack/${STACK_BASE}-dev/*",
