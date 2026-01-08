@@ -101,6 +101,7 @@
         "lambda:CreateFunction",
         "lambda:UpdateFunctionCode",
         "lambda:UpdateFunctionConfiguration",
+        "lambda:InvokeFunction",
         "lambda:DeleteFunction",
         "lambda:AddPermission",
         "lambda:RemovePermission",
@@ -108,7 +109,7 @@
         "lambda:UntagResource"
       ],
       "Resource": [
-        "arn:aws:lambda:${REGION}:${ACCOUNT_ID}:function:*${ENV}*"
+        "arn:aws:lambda:${REGION}:${ACCOUNT_ID}:function:*_${ENV}"
       ]
     },
     {

@@ -27,7 +27,10 @@ Resources:
 
   IoTRulesStack:
     Type: AWS::CloudFormation::Stack
-    DependsOn: DynamoStack
+    DependsOn: [
+      DynamoStack,
+      S3Stack
+    ]
     Properties:
       TemplateURL: nested/IoTRules.yaml
       Parameters:
@@ -36,6 +39,7 @@ Resources:
         DynamoTableName: !GetAtt DynamoStack.Outputs.TableName
         DynamoTableArn: !GetAtt DynamoStack.Outputs.TableArn
         DynamoRoleArn: !GetAtt DynamoStack.Outputs.IoTRuleRoleArn
+        UploadBucketName: !GetAtt S3Stack.Outputs.CameraDataBucketName
   
   IoTCoreStack:
     Type: AWS::CloudFormation::Stack

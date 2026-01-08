@@ -16,6 +16,9 @@ Parameters:
   DynamoRoleArn:
     Type: String
     Description: IAM role ARN assumed by IoT Rules for DynamoDBv2 actions.
+  UploadBucketName:
+    Type: String
+    Description: The bucket where files should be uploaded from the camera
 
 Resources:
   UpdateOngoingRecordingRole:
@@ -275,6 +278,155 @@ Resources:
           - Lambda:
               FunctionArn: !GetAtt UpdateOngoingRecordingFunction.Arn
 
+#========================== Upload orchestrator ==========================
+  UploadOrchestratorRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ParentStackName}-upload-orchestrator-role-${Environment}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: "sts:AssumeRole"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: UploadOrchestratorAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # DynamoDB (your camera data table)
+              - Sid: DdbAccess
+                Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                  - dynamodb:PutItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:DeleteItem
+                  - dynamodb:TransactWriteItems
+                  - dynamodb:Query
+                Resource:
+                  - !Ref DynamoTableArn
+                  - !Sub "${DynamoTableArn}/index/*"
+        - PolicyName: S3MultipartForUploads
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # Create + Complete require PutObject on the OBJECT key
+              - Sid: PutObjectForMPU
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                Resource:
+                  - !Sub "arn:aws:s3:::${UploadBucketName}/*"
+
+              # Upload individual parts
+              - Sid: UploadPart
+                Effect: Allow
+                Action:
+                  - s3:UploadPart
+                Resource:
+                  - !Sub "arn:aws:s3:::${UploadBucketName}/*"
+
+              # Abort unfinished uploads
+              - Sid: AbortMPU
+                Effect: Allow
+                Action:
+                  - s3:AbortMultipartUpload
+                Resource:
+                  - !Sub "arn:aws:s3:::${UploadBucketName}/*"
+
+              # (Optional) List parts / in-progress uploads for diagnostics
+              - Sid: ListForDiagnostics
+                Effect: Allow
+                Action:
+                  - s3:ListBucketMultipartUploads
+                Resource:
+                  - !Sub "arn:aws:s3:::${UploadBucketName}"
+              # Publish commands back to the device over IoT
+              - Sid: IotPublish
+                Effect: Allow
+                Action: iot:Publish
+                Resource:
+                  - !Sub "arn:aws:iot:${AWS::Region}:${AWS::AccountId}:topic/${ParentStackName}/${Environment}/uploads/*/*/commands"
+        - PolicyName: IotDescribeEndpoint
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: AllowDescribeEndpoint
+                Effect: Allow
+                Action: iot:DescribeEndpoint
+                Resource: "*"     # DescribeEndpoint doesn't support resource ARNs
+
+  UploadOrchestratorFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ParentStackName}_UploadOrchestrator_${Environment}"
+      Description: Drives S3 multipart uploads from device STATUS via IoT.
+      Runtime: python3.12
+      Handler: src/lambda_function.lambda_handler
+      Role: !GetAtt UploadOrchestratorRole.Arn
+      Timeout: 20
+      MemorySize: 384
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref DynamoTableName
+          UPLOAD_BUCKET: !Ref UploadBucketName
+          PRESIGN_TTL_SECS: "900"
+          TOPIC_PREFIX: !Sub "${ParentStackName}/${Environment}"
+      # Packaged artifact (same convention as your other Lambda)
+      Code: lambda/UploadOrchestrator.zip
+  
+  IotUploadStatusRuleInvokePerm:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: "lambda:InvokeFunction"
+      FunctionName: !Ref UploadOrchestratorFunction
+      Principal: "iot.amazonaws.com"
+      SourceArn: !GetAtt IotUploadStatusRule.Arn
+
+  IotUploadStatusRule:
+    Type: AWS::IoT::TopicRule
+    Properties:
+      RuleName: !Sub "${ParentStackName}_UploadStatus_${Environment}"
+      TopicRulePayload:
+        AwsIotSqlVersion: "2016-03-23"
+        RuleDisabled: false
+        Description: "Consumes upload STATUS from devices and invokes the orchestrator"
+        Sql: !Sub |
+          SET
+            @nowMs     = timestamp(),
+            @thing     = topic(4),
+            @uploadId  = topic(5),
+            @pk        = concat('Camera#', @thing),
+            @skMeta    = concat('Up#', @uploadId)
+
+          SELECT
+            @pk           AS PK,
+            @skMeta       AS SK,
+            @thing        AS thingName,
+            @uploadId     AS uploadId,
+
+            op            AS op,
+            recording_id  AS recording_id,
+            status        AS deviceStatus,
+            part_number   AS partNumber,
+            etag          AS etag,
+            parts         AS parts,
+            error_code    AS errorCode,
+            error_message AS errorMessage,
+
+            @nowMs        AS receivedAt
+          FROM '${ParentStackName}/${Environment}/uploads/+/+/status'
+          WHERE @thing = clientid()
+        Actions:
+          - Lambda:
+              FunctionArn: !GetAtt UploadOrchestratorFunction.Arn
+
+
 Outputs:
   UpdateOngoingRecordingLambdaArn:
     Value: !GetAtt UpdateOngoingRecordingFunction.Arn
+  UploadOrchestratorLambdaArn:
+    Value: !GetAtt UploadOrchestratorFunction.Arn
