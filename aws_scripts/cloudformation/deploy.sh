@@ -248,12 +248,72 @@ elif [[ "$ENVIRONMENT" == "prod" ]]; then
 fi
 echo "==> Role ARN: ${CFN_EXEC_ROLE_ARN}"
 
-aws "${AWS_ARGS[@]}" cloudformation deploy \
+# --- Deploy via Change Set with auto-import ---
+stack_exists() {
+  aws "${AWS_ARGS[@]}" cloudformation describe-stacks --stack-name "$STACK_NAME" >/dev/null 2>&1
+}
+
+CHANGE_SET_TYPE="UPDATE"
+WAIT_MODE="stack-update-complete"
+if ! stack_exists; then
+  CHANGE_SET_TYPE="CREATE"
+  WAIT_MODE="stack-create-complete"
+fi
+
+CHANGE_SET_NAME="autoimport-$(date +%Y%m%d-%H%M%S)-$RANDOM"
+
+echo "==> Creating change set ($CHANGE_SET_TYPE) with auto-import: $CHANGE_SET_NAME"
+
+set +e
+CHANGE_SET_ID="$(
+  aws "${AWS_ARGS[@]}" cloudformation create-change-set \
+    --stack-name "$STACK_NAME" \
+    --change-set-name "$CHANGE_SET_NAME" \
+    --change-set-type "$CHANGE_SET_TYPE" \
+    --template-body "file://${PACKAGED_TEMPLATE}" \
+    --capabilities CAPABILITY_NAMED_IAM \
+    --role-arn "$CFN_EXEC_ROLE_ARN" \
+    --parameters \
+      ParameterKey=Environment,ParameterValue="$ENVIRONMENT" \
+      ParameterKey=LowercaseStackName,ParameterValue="$LOWERCASE_STACK_BASE" \
+    --import-existing-resources \
+    --query 'Id' --output text 2>&1
+)"
+rc=$?
+set -e
+
+if [[ $rc -ne 0 ]]; then
+  echo "ERROR: create-change-set failed:"
+  echo "$CHANGE_SET_ID"
+  exit 1
+fi
+
+echo "==> Waiting for change set to be created..."
+if ! aws "${AWS_ARGS[@]}" cloudformation wait change-set-create-complete \
   --stack-name "$STACK_NAME" \
-  --template-file "$PACKAGED_TEMPLATE" \
-  --capabilities CAPABILITY_NAMED_IAM \
-  --parameter-overrides Environment="$ENVIRONMENT" LowercaseStackName="$LOWERCASE_STACK_BASE" \
-  --role-arn "$CFN_EXEC_ROLE_ARN" \
-  --no-fail-on-empty-changeset
+  --change-set-name "$CHANGE_SET_ID"; then
+
+  echo "ERROR: change set creation failed. Change set details:"
+  aws "${AWS_ARGS[@]}" cloudformation describe-change-set \
+    --stack-name "$STACK_NAME" \
+    --change-set-name "$CHANGE_SET_ID" --output json || true
+
+  echo
+  echo "==> Failed validation events (root cause):"
+  aws "${AWS_ARGS[@]}" cloudformation describe-events \
+    --change-set-name "$CHANGE_SET_ID" \
+    --filters FailedEvents=true \
+    --output table || true
+
+  exit 1
+fi
+
+echo "==> Executing change set: $CHANGE_SET_ID"
+aws "${AWS_ARGS[@]}" cloudformation execute-change-set \
+  --stack-name "$STACK_NAME" \
+  --change-set-name "$CHANGE_SET_ID"
+
+echo "==> Waiting for stack to complete ($WAIT_MODE)..."
+aws "${AWS_ARGS[@]}" cloudformation wait "$WAIT_MODE" --stack-name "$STACK_NAME"
 
 echo "==> Done. Artifacts bucket: s3://$BUCKET"

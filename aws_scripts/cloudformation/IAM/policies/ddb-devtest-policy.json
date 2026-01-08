@@ -16,6 +16,7 @@
         "dynamodb:CreateTable",
         "dynamodb:UpdateTable",
         "dynamodb:DescribeTable",
+        "dynamodb:GetItem",
         "dynamodb:Scan"
       ],
       "Resource": [
