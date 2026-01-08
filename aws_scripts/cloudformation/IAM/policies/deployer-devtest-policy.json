@@ -57,7 +57,15 @@
         "cloudformation:DescribeStackResource",
         "cloudformation:DescribeStackEvents",
         "cloudformation:GetTemplate",
-        "cloudformation:GetTemplateSummary"
+        "cloudformation:GetTemplateSummary",
+        "cloudformation:CancelUpdateStack",
+        "cloudformation:ContinueUpdateRollback",
+        "cloudformation:SetStackPolicy",
+        "cloudformation:UpdateTerminationProtection",
+        "cloudformation:DescribeChangeSet",
+        "cloudformation:GetStackPolicy",
+        "cloudformation:DescribeStackDriftDetectionStatus",
+        "cloudformation:ListStackResources"
       ],
       "Resource": [
         "arn:aws:cloudformation:${REGION}:${ACCOUNT_ID}:stack/${STACK_BASE}-dev/*",
