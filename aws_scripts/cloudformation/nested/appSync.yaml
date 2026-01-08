@@ -116,7 +116,7 @@ Resources:
   AppSyncDynamoRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "Appsync-ddb-role-${ParentStackName}-${Environment}"
+      RoleName: !Sub "${ParentStackName}-Appsync-ddb-role-${Environment}"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:

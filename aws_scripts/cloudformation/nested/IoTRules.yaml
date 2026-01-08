@@ -24,7 +24,7 @@ Resources:
   UpdateOngoingRecordingRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub "update-rec-role-${ParentStackName}-${Environment}"
+      RoleName: !Sub "${ParentStackName}-update-rec-role-${Environment}"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:

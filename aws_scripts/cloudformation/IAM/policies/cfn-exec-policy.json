@@ -109,7 +109,7 @@
         "lambda:UntagResource"
       ],
       "Resource": [
-        "arn:aws:lambda:${REGION}:${ACCOUNT_ID}:function:*_${ENV}"
+        "arn:aws:lambda:${REGION}:${ACCOUNT_ID}:function:${STACK_BASE}_*_${ENV}"
       ]
     },
     {
@@ -123,8 +123,7 @@
         "dynamodb:UntagResource"
       ],
       "Resource": [
-        "arn:aws:dynamodb:${REGION}:${ACCOUNT_ID}:table/*-${ENV}",
-        "arn:aws:dynamodb:${REGION}:${ACCOUNT_ID}:table/*-${ENV}-*"
+        "arn:aws:dynamodb:${REGION}:${ACCOUNT_ID}:table/${STACK_BASE}-cam-data-${ENV}"
       ]
     },
     {
