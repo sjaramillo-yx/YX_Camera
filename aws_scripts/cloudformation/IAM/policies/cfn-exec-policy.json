@@ -40,10 +40,10 @@
         "iam:UntagRole"
       ],
       "Resource": [
-        "arn:aws:iam::${ACCOUNT_ID}:role/*-${ENV}",
-        "arn:aws:iam::${ACCOUNT_ID}:role/*-${ENV}-*",
-        "arn:aws:iam::${ACCOUNT_ID}:role/*-${ENV_GROUP}",
-        "arn:aws:iam::${ACCOUNT_ID}:role/*-${ENV_GROUP}-*"
+        "arn:aws:iam::${ACCOUNT_ID}:role/${STACK_BASE}-*-${ENV}",
+        "arn:aws:iam::${ACCOUNT_ID}:role/${STACK_BASE}-*-${ENV}-*",
+        "arn:aws:iam::${ACCOUNT_ID}:role/${STACK_BASE}-*-${ENV_GROUP}",
+        "arn:aws:iam::${ACCOUNT_ID}:role/${STACK_BASE}-*-${ENV_GROUP}-*"
       ]
     },
     {
@@ -81,8 +81,8 @@
       "Effect": "Allow",
       "Action": "iam:PassRole",
       "Resource": [
-        "arn:aws:iam::${ACCOUNT_ID}:role/*-${ENV}",
-        "arn:aws:iam::${ACCOUNT_ID}:role/*-${ENV}-*"
+        "arn:aws:iam::${ACCOUNT_ID}:role/${STACK_BASE}-*-${ENV}",
+        "arn:aws:iam::${ACCOUNT_ID}:role/${STACK_BASE}-*-${ENV}-*"
       ],
       "Condition": {
         "StringLike": {
@@ -161,7 +161,7 @@
         "iam:ListInstanceProfilesForRole",
         "iam:RemoveRoleFromInstanceProfile"
       ],
-      "Resource": "arn:aws:iam::${ACCOUNT_ID}:role/IoT-provisioner-role-${STACK_BASE}-${ENVIRONMENT}"
+      "Resource": "arn:aws:iam::${ACCOUNT_ID}:role/${STACK_BASE}-IoT-provisioner-role-${ENVIRONMENT}"
     },
     {
       "Sid": "AppSyncScoped",
