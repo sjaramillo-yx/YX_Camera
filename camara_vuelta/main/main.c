@@ -24,10 +24,8 @@ static const char *TAG = "VueltaCAM";
 static esp_err_t publish_rec_state() {
   esp_err_t ret       = ESP_OK;
   cJSON    *rec_state = cJSON_CreateObject();
-  char     *rec_state_str;
   /// TODO: check for errors
   vman_get_rec_json(&rec_state);
-  rec_state_str = cJSON_Print(rec_state);
   mqttworker_publish_recording_state(rec_state);  // This also frees cJSON memory
   return ret;
 }
@@ -44,8 +42,11 @@ void app_main(void) {
   esp_log_level_set("transport", ESP_LOG_INFO);
   esp_log_level_set("Provision Claimer", ESP_LOG_INFO);
   esp_log_level_set("MQTT Worker", ESP_LOG_INFO);
+  esp_log_level_set("S3Uploader", ESP_LOG_INFO);
   esp_log_level_set("NVS Manager", ESP_LOG_INFO);
   esp_log_level_set("Video Manager", ESP_LOG_INFO);
+  esp_log_level_set("SDManager", ESP_LOG_INFO);
+  esp_log_level_set("HTTPHelpers", ESP_LOG_INFO);
 
   // Create the recording event loop
   rec_eventloop_create();
