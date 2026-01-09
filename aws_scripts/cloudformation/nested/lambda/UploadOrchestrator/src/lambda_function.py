@@ -121,7 +121,7 @@ def lambda_handler(event, _ctx):
 
     # waiting_init -> create MPU + META + ACTIVE (idempotent)
     if op == "waiting_init":
-        key = f"videos/{thing}/{upid}.bin"
+        key = f"videos/{thing}/{rec_id}.bin"
         meta = get_meta(pk, sk)
 
         # Determine filesize
@@ -200,7 +200,7 @@ def lambda_handler(event, _ctx):
 
     # ready_for_parts -> verify MPU exists, presign next
     if op == "ready_for_parts":
-        key = f"videos/{thing}/{upid}.bin"
+        key = f"videos/{thing}/{rec_id}.bin"
         meta = get_meta(pk, sk)
         if not meta or not meta.get("s3UploadId"):
             log.warning("META/s3UploadId missing; request re-init (thing=%s upid=%s)", thing, upid)
@@ -259,6 +259,8 @@ def lambda_handler(event, _ctx):
     if op == "part_uploaded" and ("partNumber" in event or "part_number" in event) and ("etag" in event):
         n = int(event.get("partNumber") or event.get("part_number"))
         etag = event["etag"]
+        log.info("PART_UPLOADED: part=%d etag=%s", n, etag)
+        # 1) Atomically persist the part and bump counters
         ddb.transact_write_items(TransactItems=[
             {"Put": {"TableName":TABLE,
                 "Item":{"PK":_s(pk),"SK":_s(f"Up#{upid}#Part#{n}"),
@@ -267,7 +269,30 @@ def lambda_handler(event, _ctx):
                 "UpdateExpression":"SET partsDone = if_not_exists(partsDone,:z)+:one, nextPart = :np, updatedAt=:u",
                 "ExpressionAttributeValues":{":z":_n(0),":one":_n(1),":np":_n(n+1),":u":_n(now_ms)}}}
         ])
-        return {"ok": True}
+        # 2) Fetch META to decide whether to send the next part
+        meta_after = get_meta(pk, sk)
+        if not meta_after or not meta_after.get("s3UploadId"):
+            log.warning("META missing after part persist; asking device to re-init")
+            publish_cmd(thing, upid, {"op":"init_info_needed"})
+            return {"ok": True, "next": "reinit"}
+        total_parts = int(meta_after.get("totalParts", 1))
+        next_part   = int(meta_after.get("nextPart", n+1))
+        key         = f"videos/{thing}/{rec_id}.bin"
+        s3_id       = meta_after["s3UploadId"]
+        log.info("PART_STATE: partsDone=%s nextPart=%s totalParts=%s", meta_after.get("partsDone"), next_part, total_parts)
+        # 3) If more parts remain, presign and send next URL; otherwise wait for all_parts_uploaded
+        if next_part <= total_parts:
+            url = s3.generate_presigned_url("upload_part",
+                   Params={"Bucket":BUCKET,"Key":key,"UploadId":s3_id,"PartNumber":next_part},
+                   ExpiresIn=PRESIGN_TTL_SECS)
+            publish_cmd(thing, upid, {"op":"part","part_number":next_part,"url":url})
+            ddb.update_item(TableName=TABLE, Key={"PK":_s(pk),"SK":_s(sk)},
+                UpdateExpression="SET lastCommand=:lc, updatedAt=:u",
+                ExpressionAttributeValues={":lc":{"M":{"op":_s("part"),"part_number":_n(next_part)}},":u":_n(now_ms)})
+            return {"ok": True, "next": next_part}
+        else:
+            log.info("All parts uploaded according to counters; waiting for device to publish all_parts_uploaded")
+            return {"ok": True, "next": "await_complete"}
 
     # all_parts_uploaded -> complete MPU
     if op == "all_parts_uploaded":
@@ -276,7 +301,7 @@ def lambda_handler(event, _ctx):
             log.error("META missing; cannot complete MPU (thing=%s upid=%s)", thing, upid)
             return {"ignored": True, "reason": "meta_missing"}
         s3_id  = meta["s3UploadId"]
-        key = f"videos/{thing}/{upid}.bin"
+        key = f"videos/{thing}/{rec_id}.bin"
         parts  = event.get("parts") or []
         ddb.update_item(TableName=TABLE, Key={"PK":_s(pk),"SK":_s(sk)},
                         UpdateExpression="SET #st=:st, updatedAt=:u",
@@ -299,7 +324,7 @@ def lambda_handler(event, _ctx):
     if op == "error":
         meta = get_meta(pk, sk)
         if meta and meta.get("s3UploadId"):
-            key = f"videos/{thing}/{upid}.bin"
+            key = f"videos/{thing}/{rec_id}.bin"
             s3_id = meta["s3UploadId"]
             try:
                 s3.abort_multipart_upload(Bucket=BUCKET, Key=key, UploadId=s3_id)
