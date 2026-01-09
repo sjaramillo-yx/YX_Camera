@@ -196,6 +196,47 @@
         "lambda:ListVersionsByFunction"
       ],
       "Resource": "*"
+    },
+    {
+      "Sid": "CloudWatchMetricsReadForLambdaMonitorTab",
+      "Effect": "Allow",
+      "Action": [
+        "cloudwatch:GetMetricData",
+        "cloudwatch:GetMetricStatistics",
+        "cloudwatch:ListMetrics",
+        "cloudwatch:DescribeAlarms",
+        "cloudwatch:DescribeAlarmsForMetric",
+        "cloudwatch:DescribeAlarmHistory"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "LogsDescribeLogGroupsNeedsStar",
+      "Effect": "Allow",
+      "Action": [
+        "logs:DescribeLogGroups"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "CloudWatchLogsReadForSpecificLambdaPattern",
+      "Effect": "Allow",
+      "Action": [
+        "logs:DescribeLogStreams",
+        "logs:GetLogEvents",
+        "logs:FilterLogEvents",
+        "logs:GetLogGroupFields",
+        "logs:DescribeQueries",
+        "logs:StartQuery",
+        "logs:GetQueryResults",
+        "logs:StopQuery"
+      ],
+      "Resource": [
+        "arn:aws:logs:${REGION}:${ACCOUNT_ID}:log-group:/aws/lambda/${STACK_BASE}_*_dev",
+        "arn:aws:logs:${REGION}:${ACCOUNT_ID}:log-group:/aws/lambda/${STACK_BASE}_*_dev:*",
+        "arn:aws:logs:${REGION}:${ACCOUNT_ID}:log-group:/aws/lambda/${STACK_BASE}_*_test",
+        "arn:aws:logs:${REGION}:${ACCOUNT_ID}:log-group:/aws/lambda/${STACK_BASE}_*_test:*"
+      ]
     }
   ]
 }
