@@ -5,9 +5,85 @@ menu "Provisioning configuration"
         default "cameraTemplate"
 endmenu
 
-menu "MQTT Worker configuration"
-    
-    config AWS_ENDPOINT
-        string "The AWS endpoint to be used"
-        default  ""
+menu "S3 Uploader"
+
+    config S3_READY_FOR_PARTS_MS
+        int "milliseconds to wait between 'ready for parts' messages"
+        default 5000
+        help
+            After receiving initial information, the S3 uploader informs AWS that is ready to receive parts.
+            If the server doesn't respond, the uploader will hang forever, so it resends the message after
+            CONFIG_READY_FOR_PARTS_MS milliseconds.
+
+    config S3_DEFAULT_PART_SIZE
+        int "Default multipart part size (bytes)"
+        default 8388608
+        range 524288 67108864
+        help
+            Default size (in bytes) used for multipart uploads when init_info omits part_size.
+            8388608 = 8 MiB.
+
+    config S3_HTTP_TIMEOUT_MS
+        int "HTTP timeout per part PUT (ms)"
+        default 20000
+        range 1000 120000
+        help
+            Timeout used by esp_http_client for each part upload request.
+
+    config S3_HTTP_PUT_RETRIES
+        int "HTTP PUT retries per part"
+        default 3
+        range 0 10
+        help
+            Number of retry attempts for each part upload.
+
+    menu "Buffer / ID length limits"
+
+        config S3_MAX_TOPIC_LEN
+            int "Max MQTT topic length"
+            default 256
+            range 64 1024
+
+        config S3_MAX_THING_NAME
+            int "Max thingName length"
+            default 96
+            range 16 256
+
+        config S3_MAX_RECORDING_ID
+            int "Max recordingId length"
+            default 64
+            range 16 256
+
+        config S3_MAX_UPLOAD_ID
+            int "Max uploadId length"
+            default 128
+            range 16 512
+
+        config S3_MAX_PATH_LEN
+            int "Max file path length"
+            default 256
+            range 64 512
+
+        config S3_MAX_BUCKET_LEN
+            int "Max S3 bucket name length"
+            default 128
+            range 16 256
+
+        config S3_MAX_KEY_LEN
+            int "Max S3 key length"
+            default 256
+            range 32 1024
+
+        config S3_MAX_URL_LEN
+            int "Max presigned URL length"
+            default 2048
+            range 256 4096
+
+        config S3_MAX_ETAG_LEN
+            int "Max ETag header length"
+            default 80
+            range 32 256
+
+    endmenu
+
 endmenu

@@ -203,6 +203,66 @@ static bool IRAM_ATTR on_trans_finished(esp_cam_ctlr_handle_t h, esp_cam_ctlr_tr
 static esp_cam_ctlr_evt_cbs_t cbs = {.on_trans_finished = on_trans_finished};
 
 /*================== Statics ==================*/
+// Returns:
+//   SIZE_MAX = "drop this whole buffer" (not ready)
+//   [0..len-1] = start writing at this offset inside buf
+static inline size_t h264_start_at_2nd_idr(const uint8_t *buf, size_t len) {
+  enum { SKIP_IDRS = 1 };  // drop first GOP (first IDR)
+  static uint32_t idr_seen;
+  static bool     started;
+
+  if (!buf || !len) {
+    started  = false;
+    idr_seen = 0;
+    return (size_t)-1;
+  }
+  if (started)
+    return 0;
+
+  size_t last_sps = (size_t)-1, last_pps = (size_t)-1;
+
+  for (size_t i = 0; i + 4 < len;) {
+    size_t sc = (size_t)-1, sc_len = 0;
+
+    if (buf[i] == 0 && buf[i + 1] == 0 && buf[i + 2] == 1) {
+      sc     = i;
+      sc_len = 3;
+    } else if (buf[i] == 0 && buf[i + 1] == 0 && buf[i + 2] == 0 && buf[i + 3] == 1) {
+      sc     = i;
+      sc_len = 4;
+    }
+
+    if (sc == (size_t)-1) {
+      i++;
+      continue;
+    }
+
+    size_t hdr = sc + sc_len;
+    if (hdr >= len)
+      break;
+
+    uint8_t nal_type = buf[hdr] & 0x1F;
+
+    if (nal_type == 7)
+      last_sps = sc;  // SPS
+    else if (nal_type == 8)
+      last_pps = sc;           // PPS
+    else if (nal_type == 5) {  // IDR
+      idr_seen++;
+      if (idr_seen <= SKIP_IDRS) {
+        last_sps = last_pps = (size_t)-1;  // discard headers for skipped GOP
+      } else if (last_sps != (size_t)-1 && last_pps != (size_t)-1) {
+        started = true;
+        return last_sps;  // start at SPS (includes PPS + IDR after it)
+      }
+    }
+
+    i = hdr + 1;
+  }
+
+  return (size_t)-1;  // keep dropping until we can start with SPS+PPS+IDR
+}
+
 static esp_err_t update_active_format(uint16_t hres, uint16_t vres, uint16_t sensor_fps,
                                       uint16_t output_fps) {
   // Check that the required frame bytes fit in the buffers
@@ -382,29 +442,42 @@ static void write_to_sd_task(void *arg) {
   }
 
   ESP_LOGI(TAG, "[%s] Writer ready, entering loop", pcTaskGetName(NULL));
-  esp_h264_enc_out_frame_t *curr_frame = NULL;
-  uint64_t                  to_flush   = 0;
+  esp_h264_enc_out_frame_t *curr_frame   = NULL;
+  uint64_t                  to_flush     = 0;
+  bool                      in_recording = false;
   while (1) {
+    if (recording && !in_recording) {
+      in_recording = true;
+      h264_start_at_2nd_idr(NULL, 0);
+      staging.active.staged   = 0;
+      staging.inactive.staged = 0;
+    } else if (!recording && in_recording) {
+      in_recording = false;
+    }
     if (xQueueReceive(s_filled_encoded_q, &curr_frame, portMAX_DELAY) != pdTRUE || !curr_frame) {
       continue;
     }
 
-    // Check if received data can be copied to the active stage
-    if (staging.active.staged + curr_frame->length > STAGE_SIZE) {
-      // If not, discard the data
-      /// TODO: Check if this frame fits in the inactive stage
+    // Decide whether to drop / where to start writing in this encoded chunk
+    size_t off = h264_start_at_2nd_idr(curr_frame->raw_data.buffer, curr_frame->length);
+    if (off == SIZE_MAX)
+      goto done;  // drop whole chunk until we're "started"
+    if (off == (size_t)-1 || off >= (size_t)curr_frame->length)
+      goto done;  // Skip frame if offset is invalid
+
+    const uint8_t *p = curr_frame->raw_data.buffer + off;
+    size_t         n = curr_frame->length - off;
+
+    if (staging.active.staged + n > STAGE_SIZE) {  // use n (not curr_frame->length)
       ESP_LOGW(TAG, "[%s] Staging overflow, discarding data", pcTaskGetName(NULL));
       goto done;
     }
 
-    // Now copy the data to the active staging buffer
-    /// TODO: Remove portMAX_DELAY and handle errors
     xSemaphoreTake(staging.active.write_smphr, portMAX_DELAY);
-    ESP_ERROR_CHECK(esp_async_memcpy(driver, staging.active.data + staging.active.staged,
-                                     curr_frame->raw_data.buffer, curr_frame->length,
+    ESP_ERROR_CHECK(esp_async_memcpy(driver, staging.active.data + staging.active.staged, p, n,
                                      my_async_memcpy_cb, dma_semphr));
-    xSemaphoreTake(dma_semphr, portMAX_DELAY);  // Wait until the buffer copy is done
-    staging.active.staged += curr_frame->length;
+    xSemaphoreTake(dma_semphr, portMAX_DELAY);
+    staging.active.staged += n;
 
     // Check if threshold has been crossed
     if (staging.active.staged >= STAGE_LIMIT) {
@@ -631,7 +704,7 @@ static void vman_rec_handler(void *handler_arg, esp_event_base_t event_base, int
                              void *event_data) {
   ESP_LOGD(TAG, "Received event %s:%d", (char *)event_base, event_id);
   esp_err_t started = ESP_OK;
-  char      rec_filename[132];
+  char      rec_filename[160];
   char     *stop_id;
   switch (event_id) {
   case REC_BEGIN:
@@ -660,7 +733,7 @@ static void vman_rec_handler(void *handler_arg, esp_event_base_t event_base, int
     }
     apply_encoder_runtime_config(&rec_conf);
     // Begin the recording
-    snprintf(rec_filename, sizeof(rec_filename), "%s.bin", rec_conf.transaction_id);
+    snprintf(rec_filename, sizeof(rec_filename), "videos/%s.bin", rec_conf.transaction_id);
     started = vman_start_recording(rec_filename);
     if (started != ESP_OK) {
       /// TODO: Handle errors here
@@ -722,7 +795,8 @@ esp_err_t vman_init(void) {
   // Create the async DMA copy engine
   /// TODO: Handle errors instead of aborting
   async_memcpy_config_t config = ASYNC_MEMCPY_DEFAULT_CONFIG();
-  ESP_ERROR_CHECK(esp_async_memcpy_install_gdma_axi(&config, &driver));
+  ESP_RETURN_ON_ERROR(esp_async_memcpy_install_gdma_axi(&config, &driver), TAG,
+                      "Couldn't install async DMA copy engine");
 
   // Create the MIPI LDO to set the bus voltage
   esp_ldo_channel_handle_t ldo_mipi_phy        = NULL;
@@ -730,23 +804,27 @@ esp_err_t vman_init(void) {
       .chan_id    = LDO_UNIT_3,
       .voltage_mv = 2500,
   };
-  ESP_ERROR_CHECK(esp_ldo_acquire_channel(&ldo_mipi_phy_config, &ldo_mipi_phy));
+  ESP_RETURN_ON_ERROR(esp_ldo_acquire_channel(&ldo_mipi_phy_config, &ldo_mipi_phy), TAG,
+                      "Couldn't adquire LDO channel");
 
   //--------Camera Sensor and SCCB Init-----------//
   sensor_init(&cam_sensor_config, &s_cam_dev);
 
   // Configure the pipeline
-  ESP_ERROR_CHECK(vman_configure_resolution(s_hres, s_vres, s_output_fps));
+  ESP_RETURN_ON_ERROR(vman_configure_resolution(s_hres, s_vres, s_output_fps), TAG,
+                      "Couldn't configure the VideoManager pipeline");
 
   //---------------FreeRTOS Tasks------------------//
   xTaskCreatePinnedToCore(write_to_sd_task, "vman.write.loop", 4096, NULL, 8, &write_task, 0);
   xTaskCreatePinnedToCore(capture_encode_task, "vman.capture.loop", 6144, NULL, 5, &capture, 1);
 
   //---------------Recording event loop------------------//
-  /// TODO:  Check for errors
-  ESP_ERROR_CHECK(rec_eventloop_get_handle(&rec_event_h));
-  ESP_ERROR_CHECK(esp_event_handler_instance_register_with(
-      rec_event_h, RECORDING_EVENTS, ESP_EVENT_ANY_ID, vman_rec_handler, NULL, NULL));
+  ESP_RETURN_ON_ERROR(rec_eventloop_get_handle(&rec_event_h), TAG,
+                      "Couldn't obtain recording eventloop handle");
+  ESP_RETURN_ON_ERROR(esp_event_handler_instance_register_with(rec_event_h, RECORDING_EVENTS,
+                                                               ESP_EVENT_ANY_ID, vman_rec_handler,
+                                                               NULL, NULL),
+                      TAG, "Couldn't register event handler instance");
   // Done
   initialized = true;
 
@@ -895,6 +973,9 @@ esp_err_t vman_getJSON(cJSON **vmanJSON) {
   cJSON *sensor_info = cJSON_AddObjectToObject(*vmanJSON, "sensor");
   if (sensor_info == NULL)
     goto end;
+
+  // If no sensor available, return
+  ESP_GOTO_ON_FALSE(s_cam_dev != NULL, ESP_ERR_INVALID_STATE, end, TAG, "No sensor detected");
 
   // Sensor name
   cJSON_AddStringToObject(sensor_info, "name", s_cam_dev->name);

@@ -10,6 +10,7 @@
 #include "nvs_manager.h"
 #include "provision_claimer.h"
 #include "recording_worker.h"
+#include "s3_uploader.h"
 
 static const char *TAG = "MQTT Worker"; /**< Logging tag for this module. */
 
@@ -81,8 +82,11 @@ static void mqtt_connected_handler(void *handler_args, esp_event_base_t base, in
   char                     topic_name[1024] = "";
 
   // Subscribe to relevant topics
-  snprintf(topic_name, 1024, "yx/recordings/%s/start", mqtt_cert_data.thing_name);
+  snprintf(topic_name, 1024, CONFIG_PROJ_BASE_NAME "/" CONFIG_PROJ_ENV_NAME "/recordings/%s/start",
+           mqtt_cert_data.thing_name);
   esp_mqtt_client_subscribe(client, topic_name, 0);
+  // Connect the S3 uploader
+  s3_uploader_on_connected();
   // Give the initialization semaphore
   xSemaphoreGive(mqtt_init_semphr);
 }
@@ -108,7 +112,8 @@ static void mqtt_data_handler(void *handler_args, esp_event_base_t base, int32_t
   ESP_LOGD(TAG, "Received data from MQTT topic %s", received_topic);
 
   /* -- Recording start command --*/
-  snprintf(topic_name, 1024, "yx/recordings/%s/start", mqtt_cert_data.thing_name);
+  snprintf(topic_name, 1024, CONFIG_PROJ_BASE_NAME "/" CONFIG_PROJ_ENV_NAME "/recordings/%s/start",
+           mqtt_cert_data.thing_name);
   if (!strcmp(received_topic, topic_name)) {
     /// TODO: Handle payload being sent in multiple events
     payload = cJSON_ParseWithLength(event->data, event->data_len);
@@ -120,16 +125,18 @@ static void mqtt_data_handler(void *handler_args, esp_event_base_t base, int32_t
     esp_event_post_to(rec_event_h, RECORDING_EVENTS, REC_BEGIN, (void *)&rec_conf, sizeof(rec_conf),
                       100);
     // Subscribe to relevant topic
-    snprintf(topic_name, 1024, "yx/recordings/%s/%s/commands", mqtt_cert_data.thing_name,
-             rec_conf.transaction_id);
+    snprintf(topic_name, 1024,
+             CONFIG_PROJ_BASE_NAME "/" CONFIG_PROJ_ENV_NAME "/recordings/%s/%s/commands",
+             mqtt_cert_data.thing_name, rec_conf.transaction_id);
     esp_mqtt_client_subscribe(client, topic_name, 0);
 
     goto cleanup;
   }
 
   /* -- In progress recording topic --*/
-  snprintf(topic_name, 1024, "yx/recordings/%s/%s/commands", mqtt_cert_data.thing_name,
-           rec_conf.transaction_id);
+  snprintf(topic_name, 1024,
+           CONFIG_PROJ_BASE_NAME "/" CONFIG_PROJ_ENV_NAME "/recordings/%s/%s/commands",
+           mqtt_cert_data.thing_name, rec_conf.transaction_id);
   if (!strcmp(received_topic, topic_name)) {
     // Get the payload
     payload = cJSON_ParseWithLength(event->data, event->data_len);
@@ -151,6 +158,19 @@ static void mqtt_data_handler(void *handler_args, esp_event_base_t base, int32_t
     }
     goto cleanup;
   }
+
+  /* -- Upload commands --*/
+  snprintf(topic_name, 1024, CONFIG_PROJ_BASE_NAME "/" CONFIG_PROJ_ENV_NAME "/uploads/%s/",
+           mqtt_cert_data.thing_name);
+  if (strstr(received_topic, topic_name) != NULL) {
+    /// TODO: Handle payload being sent in multiple events
+    ESP_LOGD(TAG, "Passing %s to s3 uploader handler", received_topic);
+    s3_uploader_handler(received_topic, event->data, event->data_len);
+
+    goto cleanup;
+  }
+  /* -- Ongoing upload commands -- */
+
 cleanup:
   if (payload)
     cJSON_Delete(payload);
@@ -187,7 +207,8 @@ static void mqttworker_rec_handler(void *handler_arg, esp_event_base_t event_bas
     cJSON_AddNumberToObject(payload, "targetFps", vman_rec_params->fps);
     cJSON_AddNumberToObject(payload, "targetBitrate", vman_rec_params->target_bitrate);
     cJSON_AddNumberToObject(payload, "timeout", vman_rec_params->timeout_seconds);
-    snprintf(topic_name, sizeof(topic_name), "yx/recordings/%s/%s/status",
+    snprintf(topic_name, sizeof(topic_name),
+             CONFIG_PROJ_BASE_NAME "/" CONFIG_PROJ_ENV_NAME "/recordings/%s/%s/status",
              mqtt_cert_data.thing_name, rec_conf.transaction_id);
     topic_name[sizeof(topic_name) - 1] = '\0';
     payload_str                        = cJSON_Print(payload);
@@ -200,11 +221,15 @@ static void mqttworker_rec_handler(void *handler_arg, esp_event_base_t event_bas
     vman_rec_file = (recording_file_t *)event_data;
     cJSON_AddStringToObject(payload, "status", "DONE");
     cJSON_AddStringToObject(payload, "transactionId", rec_conf.transaction_id);
+    res = cJSON_AddArrayToObject(payload, "resolution");
+    cJSON_AddItemToArray(res, cJSON_CreateNumber(rec_conf.hres));
+    cJSON_AddItemToArray(res, cJSON_CreateNumber(rec_conf.vres));
     cJSON_AddStringToObject(payload, "filename", vman_rec_file->filename);
     cJSON_AddNumberToObject(payload, "filesize", vman_rec_file->size);
     cJSON_AddNumberToObject(payload, "recordedSeconds", vman_rec_file->recorded_seconds);
-    snprintf(topic_name, 1024, "yx/recordings/%s/%s/status", mqtt_cert_data.thing_name,
-             rec_conf.transaction_id);
+    snprintf(topic_name, 1024,
+             CONFIG_PROJ_BASE_NAME "/" CONFIG_PROJ_ENV_NAME "/recordings/%s/%s/status",
+             mqtt_cert_data.thing_name, rec_conf.transaction_id);
     payload_str = cJSON_Print(payload);
     msg_id      = esp_mqtt_client_publish(client, topic_name, payload_str, 0, 1, 0);
     cJSON_free(payload_str);
@@ -227,10 +252,12 @@ static void mqttworker_rec_handler(void *handler_arg, esp_event_base_t event_bas
     cJSON_AddNumberToObject(payload, "timestamp", (uint64_t)system_time.tv_sec);
     payload_str = cJSON_Print(payload);
     if (strcmp(vman_rec_error->transaction_id, "")) {
-      snprintf(topic_name, 1024, "yx/recordings/%s/%s/status", mqtt_cert_data.thing_name,
-               vman_rec_error->transaction_id);
+      snprintf(topic_name, 1024,
+               CONFIG_PROJ_BASE_NAME "/" CONFIG_PROJ_ENV_NAME "/recordings/%s/%s/status",
+               mqtt_cert_data.thing_name, vman_rec_error->transaction_id);
     } else {
-      strncpy(topic_name, "yx/cameras/error", sizeof(topic_name));
+      strncpy(topic_name, CONFIG_PROJ_BASE_NAME "/" CONFIG_PROJ_ENV_NAME "/cameras/error",
+              sizeof(topic_name));
     }
     msg_id = esp_mqtt_client_publish(client, topic_name, payload_str, 0, 1, 0);
     cJSON_free(payload_str);
@@ -286,7 +313,16 @@ esp_err_t mqttworker_begin(void) {
   rec_eventloop_get_handle(&rec_event_h);
   ESP_ERROR_CHECK(esp_event_handler_instance_register_with(
       rec_event_h, RECORDING_EVENTS, ESP_EVENT_ANY_ID, mqttworker_rec_handler, NULL, NULL));
+  /* Initialize the uploader */
+  s3uploader_cfg_t up_cfg = {
+      .thing_name       = mqtt_cert_data.thing_name,
+      .rec_dir          = "videos",
+      .http_timeout_ms  = 20000,
+      .http_put_retries = 3,
+  };
+  ESP_ERROR_CHECK(s3uploader_init(client, &up_cfg));
   /* Start MQTT event loop */
+  ESP_LOGI(TAG, "Conneting to endpoint: %s", CONFIG_AWS_ENDPOINT);
   esp_mqtt_client_start(client);
   /* Wait for the client to stablish a connection */
   xSemaphoreTake(mqtt_init_semphr, portMAX_DELAY);
@@ -309,7 +345,9 @@ esp_err_t mqttworker_publish_initial_state(cJSON *sdJSON, cJSON *vmanJSON) {
   cJSON_AddItemToObject(payload, "videoInfo", vmanJSON);
   cJSON_AddStringToObject(payload, "firmwareVersion", esp_app_get_description()->version);
   payload_str = cJSON_Print(payload);
-  int msg_id  = esp_mqtt_client_publish(client, "yx/cameras/hello", payload_str, 0, 1, 0);
+  int msg_id  = esp_mqtt_client_publish(
+      client, CONFIG_PROJ_BASE_NAME "/" CONFIG_PROJ_ENV_NAME "/cameras/hello", payload_str, 0, 1,
+      0);
   ESP_LOGD(TAG, "sent publish successful, msg_id=%d", msg_id);
   cJSON_free(payload_str);
   cJSON_Delete(payload);
@@ -331,7 +369,9 @@ esp_err_t mqttworker_publish_current_state(cJSON *sdJSON, bool is_recording) {
   cJSON_AddItemToObject(payload, "sdCardInfo", sdJSON);
   cJSON_AddBoolToObject(payload, "isRecording", is_recording);
   payload_str = cJSON_Print(payload);
-  int msg_id  = esp_mqtt_client_publish(client, "yx/cameras/status", payload_str, 0, 1, 0);
+  int msg_id  = esp_mqtt_client_publish(
+      client, CONFIG_PROJ_BASE_NAME "/" CONFIG_PROJ_ENV_NAME "/cameras/status", payload_str, 0, 1,
+      0);
   ESP_LOGD(TAG, "sent publish successful, msg_id=%d", msg_id);
   cJSON_free(payload_str);
   cJSON_Delete(payload);
@@ -345,8 +385,9 @@ esp_err_t mqttworker_publish_recording_state(cJSON *recJSON) {
   char      topic_name[1024] = "";
 
   payload_str = cJSON_Print(recJSON);
-  snprintf(topic_name, 1024, "yx/recordings/%s/%s/status", mqtt_cert_data.thing_name,
-           rec_conf.transaction_id);
+  snprintf(topic_name, 1024,
+           CONFIG_PROJ_BASE_NAME "/" CONFIG_PROJ_ENV_NAME "/recordings/%s/%s/status",
+           mqtt_cert_data.thing_name, rec_conf.transaction_id);
   int msg_id = esp_mqtt_client_publish(client, topic_name, payload_str, 0, 1, 0);
   ESP_LOGD(TAG, "sent publish successful, msg_id=%d", msg_id);
   cJSON_free(payload_str);

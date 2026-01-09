@@ -3,6 +3,8 @@ set(srcs
   src/nvs_manager.c
   src/provision_claimer.c
   src/recording_worker.c
+  src/s3_uploader.c
+  src/http_helpers.c
 )
 
 set(include_dirs include)
@@ -12,6 +14,9 @@ set(
     esp_app_format
     json
     recording_events
+    mbedtls
+    esp_http_client
+    SD_manager
 )
 
 set(

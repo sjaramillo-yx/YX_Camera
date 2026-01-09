@@ -59,11 +59,19 @@ esp_err_t sdman_umount();
 /**
  * @brief Open a file in the SD card filesystem.
  *
- * @param filename The name of the file to be opened.
+ * @param path_in The path of the file to be opened.
  * @param mode IO mode for the file.
  * @param[out] file_handle A pointer to a `FILE` variable where the file handle will be stored to.
  */
-esp_err_t sdman_open_file(char *filename, char *mode, FILE **file_handle);
+esp_err_t sdman_open_file(const char *path_in, const char *mode, FILE **file_handle);
+
+/**
+ * @brief Check if file exists in SD card filesystem.
+ *
+ * @param filename The name of the file to be checked.
+ * @param[out] file_size A pointer to a size_t variable where the filesize will be saved to.
+ */
+esp_err_t sdman_stat_file(char *filename, size_t *file_size);
 
 /**
  * @brief Write data to the active staging buffer.

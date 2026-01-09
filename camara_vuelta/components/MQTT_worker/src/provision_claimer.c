@@ -63,10 +63,16 @@ static void mqtt_connected_handler(void *handler_args, esp_event_base_t base, in
     esp_mqtt_client_subscribe(client, "$aws/certificates/create/json/rejected", 0);
     break;
   case GOT_CERTIFICATE:
-    esp_mqtt_client_subscribe(
-        client, "$aws/provisioning-templates/" CONFIG_TEMPLATE_NAME "/provision/json/accepted", 0);
-    esp_mqtt_client_subscribe(
-        client, "$aws/provisioning-templates/" CONFIG_TEMPLATE_NAME "/provision/json/rejected", 0);
+    esp_mqtt_client_subscribe(client,
+                              "$aws/provisioning-templates/" CONFIG_PROJ_BASE_NAME
+                              "-" CONFIG_TEMPLATE_NAME "-" CONFIG_PROJ_ENV_NAME
+                              "/provision/json/accepted",
+                              0);
+    esp_mqtt_client_subscribe(client,
+                              "$aws/provisioning-templates/" CONFIG_PROJ_BASE_NAME
+                              "-" CONFIG_TEMPLATE_NAME "-" CONFIG_PROJ_ENV_NAME
+                              "/provision/json/rejected",
+                              0);
     break;
   default:
     break;
@@ -83,7 +89,7 @@ static void mqtt_connected_handler(void *handler_args, esp_event_base_t base, in
  */
 static void mqtt_subscribed_handler(void *handler_args, esp_event_base_t base, int32_t event_id,
                                     void *event_data) {
-  ESP_LOGD(TAG, "Subscribed to MQTT topic");
+  ESP_LOGD(TAG, "Subscribed to MQTT topic, state is 0x%01x", claimer_state);
   esp_mqtt_event_handle_t  event  = event_data;
   esp_mqtt_client_handle_t client = event->client;
   int                      msg_id;
@@ -110,9 +116,11 @@ static void mqtt_subscribed_handler(void *handler_args, esp_event_base_t base, i
     cJSON_AddStringToObject(payload, "certificateOwnershipToken", ownership_tkn);
     cJSON_AddStringToObject(parameters, "SerialNumber", serial_num);
     cJSON_AddItemToObjectCS(payload, "parameters", parameters);
-    msg_id = esp_mqtt_client_publish(
-        client, "$aws/provisioning-templates/" CONFIG_TEMPLATE_NAME "/provision/json",
-        cJSON_Print(payload), 0, 1, 0);
+    msg_id =
+        esp_mqtt_client_publish(client,
+                                "$aws/provisioning-templates/" CONFIG_PROJ_BASE_NAME
+                                "-" CONFIG_TEMPLATE_NAME "-" CONFIG_PROJ_ENV_NAME "/provision/json",
+                                cJSON_Print(payload), 0, 1, 0);
     ESP_LOGD(TAG, "sent publish successful, msg_id=%d", msg_id);
     break;
   default:
@@ -152,12 +160,19 @@ static void mqtt_data_handler(void *handler_args, esp_event_base_t base, int32_t
     snprintf(certificate_id, sizeof(certificate_id), "%s", certId->valuestring);
     snprintf(private_key, sizeof(private_key), "%s", key->valuestring);
     // Suscribe to Thing creation reserved topics
-    esp_mqtt_client_subscribe(
-        client, "$aws/provisioning-templates/" CONFIG_TEMPLATE_NAME "/provision/json/accepted", 0);
-    esp_mqtt_client_subscribe(
-        client, "$aws/provisioning-templates/" CONFIG_TEMPLATE_NAME "/provision/json/rejected", 0);
+    esp_mqtt_client_subscribe(client,
+                              "$aws/provisioning-templates/" CONFIG_PROJ_BASE_NAME
+                              "-" CONFIG_TEMPLATE_NAME "-" CONFIG_PROJ_ENV_NAME
+                              "/provision/json/accepted",
+                              0);
+    esp_mqtt_client_subscribe(client,
+                              "$aws/provisioning-templates/" CONFIG_PROJ_BASE_NAME
+                              "-" CONFIG_TEMPLATE_NAME "-" CONFIG_PROJ_ENV_NAME
+                              "/provision/json/rejected",
+                              0);
     break;
   case SUSCRIBED_THING_CREATION:
+    /// TODO: Handle errors
     claimer_state = CREATED_THING;
     // Extract thing name
     new_thing_name = cJSON_GetObjectItem(payload, "thingName");
