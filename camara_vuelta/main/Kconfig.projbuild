@@ -1,5 +1,9 @@
 menu "VueltaCam configuration"
 
+config AWS_ENDPOINT
+    string "The AWS IoT Core endpoint to be used"
+    default  ""
+
 config PROJ_BASE_NAME
     string "Name of the project"
     default "yxcam"

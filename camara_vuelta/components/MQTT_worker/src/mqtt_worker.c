@@ -159,16 +159,18 @@ static void mqtt_data_handler(void *handler_args, esp_event_base_t base, int32_t
     goto cleanup;
   }
 
-  /* -- Upload start command --*/
-  snprintf(topic_name, 1024, CONFIG_PROJ_BASE_NAME "/" CONFIG_PROJ_ENV_NAME "/uploads/%s/start",
+  /* -- Upload commands --*/
+  snprintf(topic_name, 1024, CONFIG_PROJ_BASE_NAME "/" CONFIG_PROJ_ENV_NAME "/uploads/%s/",
            mqtt_cert_data.thing_name);
-  if (!strcmp(received_topic, topic_name)) {
+  if (strstr(received_topic, topic_name) != NULL) {
     /// TODO: Handle payload being sent in multiple events
     ESP_LOGD(TAG, "Passing %s to s3 uploader handler", received_topic);
     s3_uploader_handler(received_topic, event->data, event->data_len);
 
     goto cleanup;
   }
+  /* -- Ongoing upload commands -- */
+
 cleanup:
   if (payload)
     cJSON_Delete(payload);
@@ -219,6 +221,9 @@ static void mqttworker_rec_handler(void *handler_arg, esp_event_base_t event_bas
     vman_rec_file = (recording_file_t *)event_data;
     cJSON_AddStringToObject(payload, "status", "DONE");
     cJSON_AddStringToObject(payload, "transactionId", rec_conf.transaction_id);
+    res = cJSON_AddArrayToObject(payload, "resolution");
+    cJSON_AddItemToArray(res, cJSON_CreateNumber(rec_conf.hres));
+    cJSON_AddItemToArray(res, cJSON_CreateNumber(rec_conf.vres));
     cJSON_AddStringToObject(payload, "filename", vman_rec_file->filename);
     cJSON_AddNumberToObject(payload, "filesize", vman_rec_file->size);
     cJSON_AddNumberToObject(payload, "recordedSeconds", vman_rec_file->recorded_seconds);
@@ -317,6 +322,7 @@ esp_err_t mqttworker_begin(void) {
   };
   ESP_ERROR_CHECK(s3uploader_init(client, &up_cfg));
   /* Start MQTT event loop */
+  ESP_LOGI(TAG, "Conneting to endpoint: %s", CONFIG_AWS_ENDPOINT);
   esp_mqtt_client_start(client);
   /* Wait for the client to stablish a connection */
   xSemaphoreTake(mqtt_init_semphr, portMAX_DELAY);

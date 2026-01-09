@@ -100,6 +100,7 @@ static start_msg_t start_message_temp;
 
 // Current upload
 static upload_ctx_t current_upload;
+static uint32_t     last_ready_for_parts_ms = 0;
 
 // FreeRTOS
 static TaskHandle_t  task;    // The main S3 uploader task
@@ -109,6 +110,12 @@ static QueueHandle_t cmd_q;   /* cmd_msg_t */
 /*================== Static functions ==================*/
 
 /*------------------ Helper functions -----------------*/
+static double current_time_sec(void) {
+  struct timeval system_time;
+  gettimeofday(&system_time, NULL);
+  return (double)system_time.tv_sec;
+}
+
 static esp_err_t publish_json(const char *topic, cJSON *obj, int qos) {
   char *payload_str = cJSON_PrintUnformatted(obj);
   ESP_RETURN_ON_FALSE(payload_str != NULL, ESP_FAIL, TAG, "cJSON print failed");
@@ -131,6 +138,7 @@ static esp_err_t subscribe_commands_topic(void) {
 }
 
 static esp_err_t parts_alloc(int total_parts) {
+  ESP_LOGD(TAG, "(%s) allocating %d parts", __func__, total_parts);
   ESP_RETURN_ON_FALSE(total_parts > 0, ESP_ERR_INVALID_ARG, TAG, "total_parts invalid");
   free(current_upload.parts);
   current_upload.parts = (part_slot_t *)calloc((size_t)total_parts, sizeof(part_slot_t));
@@ -143,10 +151,11 @@ static esp_err_t parts_alloc(int total_parts) {
 static esp_err_t publish_status_op(const char *op) {
   esp_err_t ret = ESP_OK;
   cJSON    *j   = cJSON_CreateObject();
+  ESP_RETURN_ON_FALSE(j != NULL, ESP_ERR_NO_MEM, TAG, "(%s) No memory for JSON payload", __func__);
   cJSON_AddStringToObject(j, "op", op);
   cJSON_AddStringToObject(j, "recording_id", current_upload.recording_id);
   cJSON_AddStringToObject(j, "upload_id", current_upload.upload_id);
-  cJSON_AddNumberToObject(j, "ts_ms", (double)(esp_timer_get_time() / 1000));
+  cJSON_AddNumberToObject(j, "timestamp", current_time_sec());
   ret = publish_json(topic_status_active, j, 1);
   cJSON_Delete(j);
   return ret;
@@ -161,7 +170,7 @@ static esp_err_t publish_status_error(const char *code, const char *message_opt)
   cJSON_AddStringToObject(j, "error_code", code);
   if (message_opt)
     cJSON_AddStringToObject(j, "message", message_opt);
-  cJSON_AddNumberToObject(j, "ts_ms", (double)(esp_timer_get_time() / 1000));
+  cJSON_AddNumberToObject(j, "timestamp", current_time_sec());
   ret = publish_json(topic_status_active, j, 1);
   cJSON_Delete(j);
   return ret;
@@ -175,7 +184,7 @@ static esp_err_t publish_status_part_uploaded(int part_number, const char *etag)
   cJSON_AddStringToObject(j, "upload_id", current_upload.upload_id);
   cJSON_AddNumberToObject(j, "part_number", part_number);
   cJSON_AddStringToObject(j, "etag", etag);
-  cJSON_AddNumberToObject(j, "ts_ms", (double)(esp_timer_get_time() / 1000));
+  cJSON_AddNumberToObject(j, "timestamp", current_time_sec());
   ret = publish_json(topic_status_active, j, 1);
   cJSON_Delete(j);
   return ret;
@@ -200,7 +209,7 @@ static esp_err_t publish_status_all_parts_uploaded(void) {
     cJSON_AddItemToArray(parts, p);
   }
 
-  cJSON_AddNumberToObject(j, "ts_ms", (double)(esp_timer_get_time() / 1000));
+  cJSON_AddNumberToObject(j, "timestamp", current_time_sec());
   ret = publish_json(topic_status_active, j, 1);
   cJSON_Delete(j);
   return ret;
@@ -287,12 +296,12 @@ static esp_err_t start_session(const start_msg_t *m) {
 
   ESP_LOGD(TAG, "Checking file existance for path %s", current_upload.file_path);
   // Check that file exists
-  if (sdman_stat_file(current_upload.file_path, NULL) != ESP_OK) {
+  if (sdman_stat_file(current_upload.file_path, &current_upload.file_size) != ESP_OK) {
     publish_status_error("recording_not_found", NULL);
     clear_session();
     goto exit;
   }
-  ESP_LOGD(TAG, "File exists");
+  ESP_LOGD(TAG, "File exists, file_size=%d", current_upload.file_size);
 
   subscribe_commands_topic();
 
@@ -341,6 +350,7 @@ static esp_err_t handle_part_info(const cmd_msg_t *m) {
 
   // Attempt to upload the part
   for (int attempt = 1; attempt <= http_put_retries; attempt++) {
+    ESP_LOGV(TAG, "(%s) Putting part to %s", __func__, m->url);
     put_ret = http_put_part(m->url, current_upload.file_path, offset, len, http_timeout_ms, etag);
     if (put_ret == ESP_OK)
       break;
@@ -375,8 +385,8 @@ cleanup:
 static esp_err_t handle_init_info(const cmd_msg_t *m) {
   esp_err_t ret = ESP_OK;
   // Confirm the uploader is waiting for initial info
-  if (state != ST_WAIT_INIT)
-    return ESP_ERR_INVALID_STATE;
+  ESP_RETURN_ON_FALSE(state == ST_WAIT_INIT, ESP_ERR_INVALID_STATE, TAG,
+                      "Uploader is not waiting for initial info");
 
   // Extract bucket and key from the message
   strlcpy(current_upload.bucket, m->bucket, sizeof(current_upload.bucket));
@@ -384,10 +394,19 @@ static esp_err_t handle_init_info(const cmd_msg_t *m) {
 
   // Extract part size from the message
   current_upload.part_size = (m->part_size > 0) ? m->part_size : CONFIG_S3_DEFAULT_PART_SIZE;
+  ESP_LOGD(TAG, "(%s) Part size set to %d", __func__, current_upload.part_size);
   // Compute total parts from the filesize and part size
-  current_upload.total_parts = (int)((current_upload.file_size + current_upload.part_size - 1) /
-                                     current_upload.part_size);  // Round up
-
+  int computed_parts =
+      (int)((current_upload.file_size + current_upload.part_size - 1) / current_upload.part_size);
+  // Check that received total parts match the part size
+  if (computed_parts != m->total_parts) {
+    ESP_LOGW(TAG, "(%s) Computed total parts (%d) don't match received total parts (%d)", __func__,
+             computed_parts, current_upload.total_parts);
+    /// TODO: Signal AWS to change total parts to the computed value
+    // current_upload.total_parts = computed_parts;
+  }
+  current_upload.total_parts = m->total_parts;
+  ESP_LOGD(TAG, "(%s) Total parts: %d", __func__, current_upload.total_parts);
   // Try to allocate and publish out of memory message on failure
   if (parts_alloc(current_upload.total_parts) != ESP_OK) {
     publish_status_error("oom_parts", NULL);
@@ -398,6 +417,7 @@ static esp_err_t handle_init_info(const cmd_msg_t *m) {
   // Move to the next state and inform AWS
   state = ST_WAIT_PARTS;
   publish_status_op("ready_for_parts");
+  last_ready_for_parts_ms = xTaskGetTickCount() * portTICK_PERIOD_MS;
   return ret;
 }
 
@@ -445,6 +465,17 @@ static void uploader_task(void *p) {
         break;
       default:
         break;
+      }
+    }
+
+    // Heartbeat: if we're waiting for parts and haven't heard back, re-publish ready_for_parts
+    if (state == ST_WAIT_PARTS) {
+      uint32_t now_ms = xTaskGetTickCount() * portTICK_PERIOD_MS;
+      if (last_ready_for_parts_ms == 0 ||
+          (now_ms - last_ready_for_parts_ms) > CONFIG_S3_READY_FOR_PARTS_MS) {
+        ESP_LOGW(TAG, "Re-publishing ready_for_parts (heartbeat)");
+        publish_status_op("ready_for_parts");
+        last_ready_for_parts_ms = now_ms;
       }
     }
 
@@ -512,7 +543,9 @@ static bool parse_commands_payload(const char *data, int len, cmd_msg_t *out) {
     // Get the part size and total parts
     out->part_size =
         (cJSON_IsNumber(psize) && psize->valuedouble > 0) ? (size_t)psize->valuedouble : 0;
+    ESP_LOGD(TAG, "(%s) Received part size: %d", __func__, out->part_size);
     out->total_parts = (cJSON_IsNumber(tparts) && tparts->valueint > 0) ? tparts->valueint : 0;
+    ESP_LOGD(TAG, "(%s) Received total parts: %d", __func__, out->total_parts);
   } else if (strcmp(op->valuestring, "part") == 0 || strcmp(op->valuestring, "part_info") == 0) {
     // If the incoming command is a part upload command, extract the part number and presigned url
     out->kind        = CMD_PART_INFO;
@@ -545,7 +578,7 @@ esp_err_t s3uploader_init(esp_mqtt_client_handle_t mqtt_client, const s3uploader
                       "rec_dir required");
   /// TODO: Check if SD card is mounted
 
-  // General uplaoder configuration
+  // General uploader configuration
   client = mqtt_client;
   strlcpy(thing_name, cfg->thing_name, sizeof(thing_name));
   strlcpy(rec_dir, cfg->rec_dir, sizeof(rec_dir));
@@ -566,7 +599,7 @@ esp_err_t s3uploader_init(esp_mqtt_client_handle_t mqtt_client, const s3uploader
   ESP_GOTO_ON_FALSE(start_q && cmd_q, ESP_ERR_NO_MEM, cleanup, TAG, "Queue create failed");
 
   // Create the uploader task
-  BaseType_t ok = xTaskCreate(uploader_task, "s3.uploader", 8192, NULL, 8, &task);
+  BaseType_t ok = xTaskCreate(uploader_task, "s3.uploader", 10240, NULL, 8, &task);
   ESP_RETURN_ON_FALSE(ok == pdPASS, ESP_FAIL, TAG, "Task create failed");
 
   // Mark the S3 uploader as initialized
@@ -597,12 +630,10 @@ esp_err_t s3_uploader_on_connected(void) {
 }
 
 esp_err_t s3_uploader_handler(const char *topic, const char *data, int data_len) {
-  ESP_LOGD(TAG, "Inside s3 uploader handler");
   // Check that the uploader is initialized
   ESP_RETURN_ON_FALSE(initialized, ESP_ERR_INVALID_STATE, TAG, "Not initialized");
   ESP_RETURN_ON_FALSE(topic && data && data_len >= 0, ESP_ERR_INVALID_ARG, TAG, "Bad args");
 
-  ESP_LOGD(TAG, "start topic is %s, comparing to received topic %s", topic_start, topic);
   // Check if the received topic matches the start upload topic
   if (!strcmp(topic, topic_start)) {
     ESP_LOGD(TAG, "Received a start upload command");

@@ -5,14 +5,15 @@ menu "Provisioning configuration"
         default "cameraTemplate"
 endmenu
 
-menu "MQTT Worker configuration"
-    
-    config AWS_ENDPOINT
-        string "The AWS endpoint to be used"
-        default  ""
-endmenu
-
 menu "S3 Uploader"
+
+    config S3_READY_FOR_PARTS_MS
+        int "milliseconds to wait between 'ready for parts' messages"
+        default 5000
+        help
+            After receiving initial information, the S3 uploader informs AWS that is ready to receive parts.
+            If the server doesn't respond, the uploader will hang forever, so it resends the message after
+            CONFIG_READY_FOR_PARTS_MS milliseconds.
 
     config S3_DEFAULT_PART_SIZE
         int "Default multipart part size (bytes)"
