@@ -8,12 +8,20 @@ endmenu
 menu "S3 Uploader"
 
     config S3_READY_FOR_PARTS_MS
-        int "milliseconds to wait between 'ready for parts' messages"
+        int "Milliseconds to wait between 'ready for parts' messages"
         default 5000
         help
             After receiving initial information, the S3 uploader informs AWS that is ready to receive parts.
             If the server doesn't respond, the uploader will hang forever, so it resends the message after
             CONFIG_READY_FOR_PARTS_MS milliseconds.
+    
+    config S3_MAX_READY_FOR_PARTS
+        int "Amount of 'ready for parts' messages to send before timeout"
+        default 10
+        help 
+            After receiving initial information, the S3 uploader informs AWS that is ready to receive parts.
+            If the server doesn't respond, the uploader will hang forever, so it resends the message after
+            CONFIG_READY_FOR_PARTS_MS milliseconds a maximum of CONFIG_S3_MAX_READY_FOR_PARTS times.
 
     config S3_DEFAULT_PART_SIZE
         int "Default multipart part size (bytes)"

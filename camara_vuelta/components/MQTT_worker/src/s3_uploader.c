@@ -79,7 +79,7 @@ typedef enum {
 
 /*-------- Globals ---------*/
 static esp_mqtt_client_handle_t client;
-static uploader_state_t         state;
+static uploader_state_t         state = ST_IDLE;
 static bool                     initialized;
 static bool                     mqtt_connected;
 
@@ -101,6 +101,7 @@ static start_msg_t start_message_temp;
 // Current upload
 static upload_ctx_t current_upload;
 static uint32_t     last_ready_for_parts_ms = 0;
+static uint8_t      ready_for_parts_count   = 0;
 
 // FreeRTOS
 static TaskHandle_t  task;    // The main S3 uploader task
@@ -298,6 +299,7 @@ static esp_err_t start_session(const start_msg_t *m) {
   // Check that file exists
   if (sdman_stat_file(current_upload.file_path, &current_upload.file_size) != ESP_OK) {
     publish_status_error("recording_not_found", NULL);
+    ESP_LOGI(TAG, "(%s) Clearing session with id %s", __func__, current_upload.upload_id);
     clear_session();
     goto exit;
   }
@@ -349,6 +351,8 @@ static esp_err_t handle_part_info(const cmd_msg_t *m) {
   esp_err_t put_ret                      = ESP_FAIL;  // Wether the part could be uploaded
 
   // Attempt to upload the part
+  ESP_LOGI(TAG, "(%s) Uploading part %d/%d for session with id %s", __func__, part,
+           current_upload.total_parts, current_upload.upload_id);
   for (int attempt = 1; attempt <= http_put_retries; attempt++) {
     ESP_LOGV(TAG, "(%s) Putting part to %s", __func__, m->url);
     put_ret = http_put_part(m->url, current_upload.file_path, offset, len, http_timeout_ms, etag);
@@ -361,6 +365,9 @@ static esp_err_t handle_part_info(const cmd_msg_t *m) {
     goto cleanup;
   }
 
+  ESP_LOGI(TAG, "(%s) Part %d/%d uploaded for session with id %s", __func__, part,
+           current_upload.total_parts, current_upload.upload_id);
+
   // Mark this part as uplaoded and store it's ETag
   if (parts_set_uploaded(part, etag) != ESP_OK) {
     publish_status_error("etag_store_failed", NULL);
@@ -372,12 +379,14 @@ static esp_err_t handle_part_info(const cmd_msg_t *m) {
   // Check if all parts where uploaded
   if (current_upload.parts_uploaded >= current_upload.total_parts) {
     publish_status_all_parts_uploaded();
+    ESP_LOGI(TAG, "All parts uploaded");
     goto cleanup;
   }
 
   return ret;
 
 cleanup:
+  ESP_LOGI(TAG, "(%s) Clearing session with ID: %s", __func__, current_upload.upload_id);
   clear_session();
   return ret;
 }
@@ -386,7 +395,7 @@ static esp_err_t handle_init_info(const cmd_msg_t *m) {
   esp_err_t ret = ESP_OK;
   // Confirm the uploader is waiting for initial info
   ESP_RETURN_ON_FALSE(state == ST_WAIT_INIT, ESP_ERR_INVALID_STATE, TAG,
-                      "Uploader is not waiting for initial info");
+                      "Uploader is not waiting for initial info, current state is 0x%01x", state);
 
   // Extract bucket and key from the message
   strlcpy(current_upload.bucket, m->bucket, sizeof(current_upload.bucket));
@@ -410,6 +419,7 @@ static esp_err_t handle_init_info(const cmd_msg_t *m) {
   // Try to allocate and publish out of memory message on failure
   if (parts_alloc(current_upload.total_parts) != ESP_OK) {
     publish_status_error("oom_parts", NULL);
+    ESP_LOGI(TAG, "(%s) Clearing session with ID %s", __func__, current_upload.upload_id);
     clear_session();
     return ESP_ERR_NO_MEM;
   }
@@ -418,6 +428,7 @@ static esp_err_t handle_init_info(const cmd_msg_t *m) {
   state = ST_WAIT_PARTS;
   publish_status_op("ready_for_parts");
   last_ready_for_parts_ms = xTaskGetTickCount() * portTICK_PERIOD_MS;
+  ready_for_parts_count   = 0;
   return ret;
 }
 
@@ -433,7 +444,7 @@ static void uploader_task(void *p) {
     if (xQueueReceive(start_q, &sm, pdMS_TO_TICKS(50)) == pdTRUE) {
       ESP_LOGD(TAG, "Popped start message from queue");
       start_session(&sm);
-      ESP_LOGD(TAG, "Session started");
+      ESP_LOGI(TAG, "(%s) Session started with ID %s", __func__, current_upload.upload_id);
     }
 
     // Check for pending commands
@@ -457,6 +468,8 @@ static void uploader_task(void *p) {
         break;
       case CMD_PART_INFO:
         ESP_LOGD(TAG, "Handling part info command");
+        uint32_t now_ms         = xTaskGetTickCount() * portTICK_PERIOD_MS;
+        last_ready_for_parts_ms = now_ms;
         handle_part_info(&cm);
         break;
       case CMD_UPLOAD_COMPLETE:
@@ -476,6 +489,13 @@ static void uploader_task(void *p) {
         ESP_LOGW(TAG, "Re-publishing ready_for_parts (heartbeat)");
         publish_status_op("ready_for_parts");
         last_ready_for_parts_ms = now_ms;
+        ready_for_parts_count++;
+      }
+      if (ready_for_parts_count > CONFIG_S3_MAX_READY_FOR_PARTS) {
+        ESP_LOGE(TAG, "(%s) Waiting for parts timed out", __func__);
+        publish_status_error("ready_for_parts_timeout", NULL);
+        ESP_LOGI(TAG, "(%s) Clearing session with ID %s", __func__, current_upload.upload_id);
+        clear_session();
       }
     }
 

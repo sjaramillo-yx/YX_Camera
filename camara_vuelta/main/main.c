@@ -47,6 +47,7 @@ void app_main(void) {
   esp_log_level_set("Video Manager", ESP_LOG_INFO);
   esp_log_level_set("SDManager", ESP_LOG_INFO);
   esp_log_level_set("HTTPHelpers", ESP_LOG_INFO);
+  esp_log_level_set("esp-x509-crt-bundle", ESP_LOG_WARN);
 
   // Create the recording event loop
   rec_eventloop_create();
