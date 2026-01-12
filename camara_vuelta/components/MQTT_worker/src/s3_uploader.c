@@ -679,3 +679,5 @@ esp_err_t s3_uploader_handler(const char *topic, const char *data, int data_len)
 
   return ESP_OK;
 }
+
+bool s3_uploader_is_busy(void) { return state != ST_IDLE; }

@@ -368,6 +368,7 @@ esp_err_t mqttworker_publish_current_state(cJSON *sdJSON, bool is_recording) {
   cJSON_AddNumberToObject(payload, "deviceTime", (uint64_t)system_time.tv_sec);
   cJSON_AddItemToObject(payload, "sdCardInfo", sdJSON);
   cJSON_AddBoolToObject(payload, "isRecording", is_recording);
+  cJSON_AddBoolToObject(payload, "isUploading", s3_uploader_is_busy());
   payload_str = cJSON_Print(payload);
   int msg_id  = esp_mqtt_client_publish(
       client, CONFIG_PROJ_BASE_NAME "/" CONFIG_PROJ_ENV_NAME "/cameras/status", payload_str, 0, 1,

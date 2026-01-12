@@ -79,6 +79,11 @@ esp_err_t s3_uploader_handler(const char *topic, const char *data, int data_len)
  */
 esp_err_t s3_uploader_on_connected(void);
 
+/**
+ * @brief Simple helper to check if an upload is currently in progress
+ */
+bool s3_uploader_is_busy(void);
+
 #ifdef __cplusplus
 }
 #endif
