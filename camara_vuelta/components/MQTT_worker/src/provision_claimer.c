@@ -6,7 +6,7 @@
  * @ingroup mqtt_worker
  */
 #include "provision_claimer.h"
-#include "nvs_manager.h"
+#include "NVS_manager.h"
 
 /*-------- Globals ---------*/
 /// TODO: Remove static memory and move to dynamic heap allocations

@@ -1,6 +1,5 @@
 set(srcs
   src/mqtt_worker.c
-  src/nvs_manager.c
   src/provision_claimer.c
   src/recording_worker.c
   src/s3_uploader.c
@@ -17,12 +16,12 @@ set(
     mbedtls
     esp_http_client
     SD_manager
+    NVS_manager
 )
 
 set(
   priv_requires
     mqtt
-    nvs_flash
 )
 
 set(priv_include_dirs private_include)

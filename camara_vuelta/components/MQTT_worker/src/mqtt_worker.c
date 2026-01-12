@@ -7,7 +7,7 @@
  */
 
 #include "mqtt_worker.h"
-#include "nvs_manager.h"
+#include "NVS_manager.h"
 #include "provision_claimer.h"
 #include "recording_worker.h"
 #include "s3_uploader.h"
