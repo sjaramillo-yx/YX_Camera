@@ -108,7 +108,8 @@ esp_err_t sdman_mount() {
 }
 
 esp_err_t sdman_umount() {
-  ESP_ERROR_CHECK(esp_vfs_fat_sdcard_unmount(mount_point, card));
+  ESP_RETURN_ON_ERROR(esp_vfs_fat_sdcard_unmount(mount_point, card), TAG,
+                      "Couldn't unmount SD card");
   ESP_LOGI(TAG, "Card unmounted");
   esp_err_t ret = sd_pwr_ctrl_del_on_chip_ldo(pwr_ctrl_handle);
   if (ret != ESP_OK) {

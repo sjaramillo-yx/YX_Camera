@@ -6,6 +6,7 @@
  * @ingroup mqtt_worker
  */
 #include "nvs_manager.h"
+#include "esp_check.h"
 
 /**
  * @brief Logging tag for this module
@@ -87,7 +88,7 @@ esp_err_t nvsman_begin(void) {
   /// TODO: Define a specific partition in flash for this
   esp_err_t err = nvs_flash_init();
   if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-    ESP_ERROR_CHECK(nvs_flash_erase());
+    ESP_RETURN_ON_ERROR(nvs_flash_erase(), TAG, "Couldn't erase NVS");
     err = nvs_flash_init();
   }
 
