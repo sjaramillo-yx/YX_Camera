@@ -35,8 +35,6 @@
 #include "SD_manager.h"
 #include "recording_events.h"
 
-#pragma once
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -64,6 +62,18 @@ esp_err_t vman_stop_recording(void);
  * @param[out] vmanJSON A pointer to the cJSON structure where the information should be saved to
  */
 esp_err_t vman_getJSON(cJSON **vmanJSON);
+
+/**
+ * @brief Write current recording information to a cJSON object
+ *
+ * @param[out] vman_rec_json A pointer to the cJSON structure where the information will be saved.
+ */
+esp_err_t vman_get_rec_json(cJSON **vman_rec_json);
+
+/**
+ * @brief Check if Video Manager is currently recording
+ */
+bool vman_is_recording();
 
 #ifdef __cplusplus
 }

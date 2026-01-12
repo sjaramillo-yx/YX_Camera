@@ -34,3 +34,13 @@ esp_err_t mqttworker_begin(void);
  * @brief Publish initial state information to AWS
  */
 esp_err_t mqttworker_publish_initial_state(cJSON *sdJSON, cJSON *vmanJSON);
+
+/**
+ * @brief Publish current state information to AWS
+ */
+esp_err_t mqttworker_publish_current_state(cJSON *sdJSON, bool is_recording);
+
+/**
+ * @brief Publish ongoing recording state information to AWS
+ */
+esp_err_t mqttworker_publish_recording_state(cJSON *recJSON);
