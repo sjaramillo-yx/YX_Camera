@@ -7,6 +7,10 @@ Parameters:
     AllowedValues: [dev, test, prod]
   ParentStackName:
     Type: String
+  OtaArtifactsBucketName:
+    Type: String
+    Description: S3 bucket that stores OTA firmware artifacts (objects read by AWS IoT OTA).
+
 
 Resources:
   IoTCameraPolicy:
@@ -187,6 +191,61 @@ Resources:
                 - "arn:aws:iot:*:*:topicfilter/$aws/provisioning-templates/${Tpl}/provision/json/rejected"
                 - { Tpl: !Ref IoTFleetProvisioningTemplate }
 
+  IoTOtaServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ParentStackName}-IoT-ota-service-role-${Environment}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: iot.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonFreeRTOSOTAUpdate  # AWS-managed
+
+      Policies:
+        - PolicyName: IoTOtaServiceActions
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # Read firmware binaries/manifests from S3
+              - Sid: ReadOtaArtifacts
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                Resource: !Sub "arn:aws:s3:::${OtaArtifactsBucketName}/*"
+
+              # Allow IoT to validate/access the bucket itself
+              - Sid: ReadOtaArtifactsBucket
+                Effect: Allow
+                Action:
+                  - s3:GetBucketLocation
+                  - s3:ListBucket
+                  - s3:ListBucketVersions
+                Resource: !Sub "arn:aws:s3:::${OtaArtifactsBucketName}"
+
+              - Sid: WriteSignedImages
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                Resource: !Sub "arn:aws:s3:::${OtaArtifactsBucketName}/SignedImages/*"
+              
+
+              - Sid: AllowSelfPassRoleToIot
+                Effect: Allow
+                Action:
+                  - iam:GetRole
+                  - iam:PassRole
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/${ParentStackName}-IoT-ota-service-role-${Environment}"
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: iot.amazonaws.com
+
+
+
 
 Outputs:
   CameraPolicyName:
@@ -197,3 +256,7 @@ Outputs:
     Value: !Ref IoTFleetProvisioningTemplate
   ProvisionerRoleArn:
     Value: !GetAtt IoTProvisionerRole.Arn
+  OtaServiceRoleArn:
+    Value: !GetAtt IoTOtaServiceRole.Arn
+  OtaServiceRoleName:
+    Value: !Ref IoTOtaServiceRole

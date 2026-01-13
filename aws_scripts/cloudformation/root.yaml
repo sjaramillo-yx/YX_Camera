@@ -43,11 +43,15 @@ Resources:
   
   IoTCoreStack:
     Type: AWS::CloudFormation::Stack
+    DependsOn: [
+      CameraDataBucket
+    ]
     Properties:
       TemplateURL: nested/IoTCore.yaml
       Parameters:
         ParentStackName: !Select [0, !Split ["-", !Ref "AWS::StackName"]]  # foo
         Environment: !Ref Environment
+        OtaArtifactsBucketName: !Ref CameraDataBucket # Note: If firmware will be uploaded to another bucket, change this parameter to match
   
   CameraDataBucket:
     Type: AWS::S3::Bucket
@@ -81,7 +85,6 @@ Resources:
         DynamoTableName: !GetAtt DynamoStack.Outputs.TableName
         DynamoTableArn: !GetAtt DynamoStack.Outputs.TableArn
         AuthType: API_KEY # optional (AWS_IAM or API_KEY)
-        AppSyncManagerRoleName: !If [IsProd, "yx-deployer-prod", "yx-deployer-devtest"]
 
 
 Outputs:
