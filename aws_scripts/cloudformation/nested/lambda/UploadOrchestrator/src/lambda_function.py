@@ -57,6 +57,46 @@ def get_meta(pk, sk):
     r = ddb.get_item(TableName=TABLE, Key={"PK": _s(pk), "SK": _s(sk)}, ConsistentRead=True)
     return ddb_to_plain(r.get("Item"))
 
+def part_exists(pk, upid, n):
+    resp = ddb.get_item(
+        TableName=TABLE,
+        Key={"PK": _s(pk), "SK": _s(f"Up#{upid}#Part#{n}")},
+        ConsistentRead=True,
+    )
+    return "Item" in resp
+
+def claim_issue_part(pk, sk, part_n):
+    """
+    Idempotent claim to issue a presigned URL for part_n.
+    Only one caller wins; others skip.
+    Allows re-issue if RESEND_PART_MS has elapsed since lastIssuedAt.
+    """
+    now_ms = int(time.time() * 1000)
+    resend_ms = int(os.environ.get("RESEND_PART_MS", "120000"))
+    threshold_ms = now_ms - resend_ms
+    cond = (
+        "(attribute_not_exists(lastIssuedPart) OR lastIssuedPart < :n) "
+        "OR (lastIssuedPart = :n AND (attribute_not_exists(lastIssuedAt) OR lastIssuedAt < :threshold))"
+    )
+    try:
+        ddb.update_item(
+            TableName=TABLE,
+            Key={"PK": _s(pk), "SK": _s(sk)},
+            UpdateExpression=("SET lastIssuedPart = :n, lastIssuedAt = :now, "
+                              "updatedAt = :now"),
+            ConditionExpression=cond,
+            ExpressionAttributeValues={
+                ":n": _n(part_n),
+                ":now": _n(now_ms),
+                ":threshold": _n(threshold_ms),
+            },
+        )
+        return True
+    except ClientError as e:
+        if e.response["Error"].get("Code") == "ConditionalCheckFailedException":
+            return False
+        raise
+
 def get_recording_size_bytes(pk, recording_id):
     """Try multiple places/attribute names to find the file size (bytes)."""
     # 1) META sometimes stores the size; caller can pass META for a quick check
@@ -245,6 +285,12 @@ def lambda_handler(event, _ctx):
                 raise
 
         next_part = int(meta.get("nextPart", 1))
+        if part_exists(pk, upid, next_part):
+            log.info("Part %d already exists; skip presign", next_part)
+            return {"ok": True, "skipped": next_part}
+        if not claim_issue_part(pk, sk, next_part):
+            log.info("Dedup: part %d already issued recently; skip", next_part)
+            return {"ok": True, "dedup": next_part}
         log.info("MPU:presign part=%d uploadId=...%s key=%s", next_part, s3_id[-10:], key)
         url = s3.generate_presigned_url("upload_part",
                Params={"Bucket":BUCKET,"Key":key,"UploadId":s3_id,"PartNumber":next_part},
@@ -282,6 +328,12 @@ def lambda_handler(event, _ctx):
         log.info("PART_STATE: partsDone=%s nextPart=%s totalParts=%s", meta_after.get("partsDone"), next_part, total_parts)
         # 3) If more parts remain, presign and send next URL; otherwise wait for all_parts_uploaded
         if next_part <= total_parts:
+            if part_exists(pk, upid, next_part):
+                log.info("Part %d already exists after persist; skip presign", next_part)
+                return {"ok": True, "skipped": next_part}
+            if not claim_issue_part(pk, sk, next_part):
+                log.info("Dedup: part %d already issued recently (post-upload); skip", next_part)
+                return {"ok": True, "dedup": next_part}
             url = s3.generate_presigned_url("upload_part",
                    Params={"Bucket":BUCKET,"Key":key,"UploadId":s3_id,"PartNumber":next_part},
                    ExpiresIn=PRESIGN_TTL_SECS)

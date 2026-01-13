@@ -23,11 +23,6 @@ Parameters:
       - AWS_IAM
       - API_KEY
     Description: Primary AppSync auth mode.
-  
-  AppSyncManagerRoleName:
-    Type: String
-    Description: Existing IAM Role name to grant AppSync management + query execution for this API.
-
 
 Conditions:
   UseApiKeyAuth: !Equals [!Ref AuthType, API_KEY]
@@ -57,6 +52,7 @@ Resources:
           #  status
           online: Boolean!
           recording: Boolean!
+          uploading: Boolean!
           sdFreeMB: Int
           sdPresent: Boolean
           sdSizeMB: Int
@@ -68,15 +64,6 @@ Resources:
         type CameraListPage {
           items: [Camera!]!
           nextToken: String
-        }
-
-        type Query {
-          #  Get details about a particular camera
-          getCamera(thingName: ID!): Camera
-          #  Returns cameras ordered by most-recent lastSeen first (via GSI sort key + descending query)
-          listCameraStatuses(limit: Int, nextToken: String): CameraListPage!
-          #  Returns recordings ordered by most-recently updated first
-          listRecordings(limit: Int, nextToken: String): RecordingsList!
         }
 
         type Recording {
@@ -101,6 +88,42 @@ Resources:
         type RecordingsList {
           items: [Recording!]!
           nextToken: String
+        }
+
+        type Upload {
+          thingName: ID!
+          uploadId: ID!
+          status: String!
+          partSize: Int
+          totalParts: Int
+          partsUploaded: Int!
+          partsLeft: Int!
+          nextPart: Int
+          startedAt: AWSTimestamp
+          updatedAt: AWSTimestamp
+          completedAt: AWSTimestamp
+          s3UploadId: String
+          key: String!
+          getUpload(thingName: ID!, uploadId: ID!): Upload
+          listUploadsByCamera(thingName: ID!, limit: Int, nextToken: String): UploadListPage!
+        }
+
+        type UploadListPage {
+          items: [Upload!]!
+          nextToken: String
+        }
+
+        type Query {
+          #  Get details about a particular camera
+          getCamera(thingName: ID!): Camera
+          #  Returns cameras ordered by most-recent lastSeen first (via GSI sort key + descending query)
+          listCameraStatuses(limit: Int, nextToken: String): CameraListPage!
+          #  Returns recordings ordered by most-recently updated first
+          listRecordings(limit: Int, nextToken: String): RecordingsList!
+          # Get details about a particular upload
+          getUpload(thingName: ID!, uploadId: ID!): Upload
+          # Returns uploads for a particular camera
+          listUploadsByCamera(thingName: ID!, limit: Int, nextToken: String): UploadListPage!
         }
 
 
@@ -276,6 +299,7 @@ Resources:
             // status fields
             online,
             recording: merged.recording ?? false,
+            uploading: merged.uploading ?? false,
             lastSeen: merged.lastSeen,
             driftSec: merged.driftSec,
             sntpSynchronized,
@@ -354,6 +378,7 @@ Resources:
               thingName,                    // must be non-null for ID!
               online,
               recording: it.recording ?? false,
+              uploading: it.uploading ?? false,
               lastSeen: it.lastSeen,
               driftSec: it.driftSec,
               sntpSynchronized,
@@ -434,14 +459,233 @@ Resources:
           return { items: mapped, nextToken };
         }
 
+  GetUploadMetaFunction:
+    Type: AWS::AppSync::FunctionConfiguration
+    DependsOn:
+      - GraphQLSchema
+      - CameraTableDataSource
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      Name: !Sub ${ParentStackName}_GetUploadMeta_${Environment}
+      DataSourceName: !GetAtt CameraTableDataSource.Name
+      Runtime: { Name: APPSYNC_JS, RuntimeVersion: "1.0.0" }
+      Code: |
+        import { util } from "@aws-appsync/utils";
+        export function request(ctx) {
+          const { thingName, uploadId } = ctx.stash;
+          return {
+            operation: "GetItem",
+            key: util.dynamodb.toMapValues({
+              PK: `Camera#${thingName}`,
+              SK: `Up#${uploadId}`,
+            }),
+          };
+        }
+        export function response(ctx) {
+          ctx.stash.meta = ctx.result ?? null;
+          return ctx.result;
+        }
+
+  CountUploadPartsFunction:
+    Type: AWS::AppSync::FunctionConfiguration
+    DependsOn:
+      - GraphQLSchema
+      - CameraTableDataSource
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      Name: !Sub ${ParentStackName}_CountUploadParts_${Environment}
+      DataSourceName: !GetAtt CameraTableDataSource.Name
+      Runtime: { Name: APPSYNC_JS, RuntimeVersion: "1.0.0" }
+      Code: |
+        import { util } from "@aws-appsync/utils";
+        // NOTE: Select: COUNT returns the number of matching items, which here means
+        //       the number of UPLOADED PARTS (rows with SK = 'Up#<uploadId>#Part#<N>').
+        export function request(ctx) {
+          const { thingName, uploadId } = ctx.stash;
+          return {
+            operation: "Query",
+            query: {
+              expression: "#pk = :pk AND begins_with(#sk, :sk)",
+              expressionNames: { "#pk": "PK", "#sk": "SK" },
+              expressionValues: util.dynamodb.toMapValues({
+                ":pk": `Camera#${thingName}`,
+                ":sk": `Up#${uploadId}#Part#`,
+              }),
+            },
+            select: "COUNT",   // COUNT == number of uploaded parts
+          };
+        }
+        export function response(ctx) {
+          const count = ctx.result?.count ?? 0;
+          ctx.stash.partsUploaded = count;  // explicit: uploaded parts count
+          return count;
+        }
+
+  ListUploadMetasForCameraFunction:
+    Type: AWS::AppSync::FunctionConfiguration
+    DependsOn:
+      - GraphQLSchema
+      - CameraTableDataSource
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      Name: !Sub ${ParentStackName}_ListUploadMetas_${Environment}
+      DataSourceName: !GetAtt CameraTableDataSource.Name
+      Runtime: { Name: APPSYNC_JS, RuntimeVersion: "1.0.0" }
+      Code: |
+        import { util } from "@aws-appsync/utils";
+        export function request(ctx) {
+          const args = ctx.args ?? {};
+          const { thingName, limit = 50, nextToken } = args;
+          return {
+            operation: "Query",
+            query: {
+              expression: "#pk = :pk AND begins_with(#sk, :sk)",
+              expressionNames: { "#pk": "PK", "#sk": "SK" },
+              expressionValues: util.dynamodb.toMapValues({
+                ":pk": `Camera#${thingName}`,
+                ":sk": "Up#",
+              }),
+            },
+            filter: {
+              expression: "NOT contains(#sk, :partTag) AND #sk <> :activeSk",
+              expressionNames: { "#sk": "SK" },
+              expressionValues: util.dynamodb.toMapValues({
+                ":partTag": "#Part#",
+                ":activeSk": "Up#ACTIVE",
+              }),
+            },
+            limit,
+            nextToken,
+            scanIndexForward: false,
+          };
+        }
+        export function response(ctx) {
+          const { items = [], nextToken = null } = ctx.result ?? {};
+          ctx.stash.list = items;
+          return { items, nextToken };
+        }
+
+  GetUploadResolver:
+    Type: AWS::AppSync::Resolver
+    DependsOn:
+      - GraphQLSchema
+      - GetUploadMetaFunction
+      - CountUploadPartsFunction
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      TypeName: Query
+      FieldName: getUpload
+      Kind: PIPELINE
+      Runtime: { Name: APPSYNC_JS, RuntimeVersion: "1.0.0" }
+      Code: |
+        import { util } from "@aws-appsync/utils";
+        export function request(ctx) {
+          ctx.stash.thingName = ctx.args.thingName;
+          ctx.stash.uploadId = ctx.args.uploadId;
+          return {};
+        }
+        export function response(ctx) {
+          const { thingName, uploadId, meta, partsUploaded = 0 } = ctx.stash;
+          if (!meta) return null;
+          const status = meta.status ?? "UNKNOWN";
+          const totalParts = meta.totalParts ?? 1;
+          const partSize = meta.partSize ?? null;
+          const nextPart = meta.nextPart ?? null;
+          const uploaded = typeof meta.partsDone === "number" ? meta.partsDone : partsUploaded;
+          const partsLeft = Math.max(0, (totalParts ?? 0) - (uploaded ?? 0));
+          return {
+            thingName,
+            uploadId,
+            status,
+            partSize,
+            totalParts,
+            partsUploaded: uploaded, // explicit: uploaded parts count
+            partsLeft,
+            nextPart,
+            startedAt: meta.startedAt,
+            updatedAt: meta.updatedAt,
+            completedAt: meta.completedAt,
+            s3UploadId: meta.s3UploadId,
+            key: `${thingName}/${uploadId}.mp4`,
+          };
+        }
+      PipelineConfig:
+        Functions:
+          - !GetAtt GetUploadMetaFunction.FunctionId
+          - !GetAtt CountUploadPartsFunction.FunctionId
+
+  ListUploadsByCameraResolver:
+    Type: AWS::AppSync::Resolver
+    DependsOn:
+      - GraphQLSchema
+      - ListUploadMetasForCameraFunction
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      TypeName: Query
+      FieldName: listUploadsByCamera
+      Kind: PIPELINE
+      Runtime: { Name: APPSYNC_JS, RuntimeVersion: "1.0.0" }
+      Code: |
+        export function request(ctx) { return {}; }
+        export function response(ctx) {
+          const thingName = ctx.args.thingName;
+          const { items = [], nextToken = null } = ctx.prev.result ?? ctx.result ?? {};
+          const mapped = items.map(it => {
+            const uploadId = it.uploadId || (typeof it.SK === "string" ? it.SK.slice("Up#".length) : null);
+            const totalParts = it.totalParts ?? 1;
+            const uploaded = typeof it.partsDone === "number" ? it.partsDone : 0;
+            const partsLeft = Math.max(0, totalParts - uploaded);
+            return {
+              thingName,
+              uploadId,
+              status: it.status ?? "UNKNOWN",
+              partSize: it.partSize,
+              totalParts,
+              partsUploaded: uploaded,  // explicit: uploaded parts count
+              partsLeft,
+              nextPart: it.nextPart,
+              startedAt: it.startedAt,
+              updatedAt: it.updatedAt,
+              completedAt: it.completedAt,
+              s3UploadId: it.s3UploadId,
+              key: `${thingName}/${uploadId}.mp4`,
+            };
+          });
+          return { items: mapped, nextToken };
+        }
+      PipelineConfig:
+        Functions:
+          - !GetAtt ListUploadMetasForCameraFunction.FunctionId
+
+
+  # Dedicated role created by this stack for managing this AppSync API (separate from deployer roles).
+  # RoleName is omitted by default to avoid name collisions; set AppSyncManagerRoleName if you must pin it.
+  AppSyncManagerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ParentStackName}-appsync-manager-role-${Environment}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          # Account admins can assume (useful for break-glass / debugging)
+          - Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Action: "sts:AssumeRole"
+          # Deployer roles can assume (CI/CD)
+          - Effect: Allow
+            Principal:
+              AWS:
+                - !Sub "arn:aws:iam::${AWS::AccountId}:role/yx-deployer-devtest"
+            Action: "sts:AssumeRole"
+
+
   AppSyncManagerPolicy:
     Type: AWS::IAM::Policy
     Properties:
-      PolicyName: !Sub 
-      - "${ParentStackName}-appsync-manage-${Environment}-${StackGuid}"
-      - StackGuid: !Select [2, !Split ["/", !Ref "AWS::StackId"]]
+      PolicyName: !Sub "${ParentStackName}-appsync-manage-${Environment}"
       Roles:
-        - !Ref AppSyncManagerRoleName
+        - !Ref AppSyncManagerRole
       PolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -542,3 +786,8 @@ Outputs:
 
   ApiNameOut:
     Value: !Sub "${ParentStackName}-camera-db-api-${Environment}"
+  AppSyncManagerRoleNameOut:
+    Value: !Ref AppSyncManagerRole
+
+  AppSyncManagerRoleArn:
+    Value: !GetAtt AppSyncManagerRole.Arn

@@ -92,7 +92,8 @@ Resources:
           SELECT 
               concat('Camera#', cast(thingName as String)) AS PK, 
               'status' AS SK, 
-              isRecording as recording, 
+              isRecording as recording,
+              isUploading as uploading,
               @nowMs AS lastSeen,
               @timeDiff AS driftSec,
             
