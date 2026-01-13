@@ -279,9 +279,13 @@ ensure_role() {
 
   local rendered="${RENDER_DIR}/trust-${role_name}.json"
   render_json "${trust_src}" "${rendered}" "${user_name}" ""
+  local max_session="${MAX_SESSION_DURATION_SECONDS:-43200}"  # 12h
 
   if aws iam get-role --role-name "${role_name}" >/dev/null 2>&1; then
     log "Role exists: ${role_name} (updating trust policy)"
+    aws iam update-role \
+      --role-name "${role_name}" \
+      --max-session-duration "${max_session}" >/dev/null
     aws iam update-assume-role-policy \
       --role-name "${role_name}" \
       --policy-document "file://${rendered}" >/dev/null
@@ -289,7 +293,8 @@ ensure_role() {
     log "Creating role: ${role_name}"
     aws iam create-role \
       --role-name "${role_name}" \
-      --assume-role-policy-document "file://${rendered}" >/dev/null
+      --assume-role-policy-document "file://${rendered}" \
+      --max-session-duration "${max_session}" >/dev/null
   fi
 }
 
