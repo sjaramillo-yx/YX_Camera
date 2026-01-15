@@ -93,6 +93,7 @@ Resources:
         type Upload {
           thingName: ID!
           uploadId: ID!
+          transactionId: ID!
           status: String!
           partSize: Int
           totalParts: Int
@@ -104,8 +105,6 @@ Resources:
           completedAt: AWSTimestamp
           s3UploadId: String
           key: String!
-          getUpload(thingName: ID!, uploadId: ID!): Upload
-          listUploadsByCamera(thingName: ID!, limit: Int, nextToken: String): UploadListPage!
         }
 
         type UploadListPage {
@@ -431,6 +430,7 @@ Resources:
           const { items = [], nextToken = null } = ctx.result ?? {};
 
           const mapped = items.map((it) => ({
+            thingName: it.PK.slice("Camera#".length),
             transactionId: it.transactionId,
             status: it.status ?? "UNKNOWN",
 
@@ -534,8 +534,8 @@ Resources:
       Code: |
         import { util } from "@aws-appsync/utils";
         export function request(ctx) {
-          const args = ctx.args ?? {};
-          const { thingName, limit = 50, nextToken } = args;
+          const { thingName, limit = 50, nextToken } = ctx.stash ?? {};
+          if (!thingName) util.error("Missing thingName in stash", "BadRequest");
           return {
             operation: "Query",
             query: {
@@ -547,12 +547,8 @@ Resources:
               }),
             },
             filter: {
-              expression: "NOT contains(#sk, :partTag) AND #sk <> :activeSk",
-              expressionNames: { "#sk": "SK" },
-              expressionValues: util.dynamodb.toMapValues({
-                ":partTag": "#Part#",
-                ":activeSk": "Up#ACTIVE",
-              }),
+              expression: "attribute_exists(#s3u)",
+              expressionNames: { "#s3u": "s3UploadId" },
             },
             limit,
             nextToken,
@@ -626,10 +622,20 @@ Resources:
       Kind: PIPELINE
       Runtime: { Name: APPSYNC_JS, RuntimeVersion: "1.0.0" }
       Code: |
-        export function request(ctx) { return {}; }
+        import { util } from "@aws-appsync/utils";
+
+        export function request(ctx) {
+          const { thingName, limit = 50, nextToken } = ctx.arguments ?? {};
+          if (!thingName) util.error("Missing thingName", "BadRequest");
+
+          ctx.stash.thingName = thingName;
+          ctx.stash.limit = limit;
+          ctx.stash.nextToken = nextToken;
+          return {};
+        }
         export function response(ctx) {
-          const thingName = ctx.args.thingName;
-          const { items = [], nextToken = null } = ctx.prev.result ?? ctx.result ?? {};
+          const thingName = ctx.stash.thingName;
+          const { items = [], nextToken = null } = ctx.prev.result ?? {};
           const mapped = items.map(it => {
             const uploadId = it.uploadId || (typeof it.SK === "string" ? it.SK.slice("Up#".length) : null);
             const totalParts = it.totalParts ?? 1;
@@ -648,7 +654,7 @@ Resources:
               updatedAt: it.updatedAt,
               completedAt: it.completedAt,
               s3UploadId: it.s3UploadId,
-              key: `${thingName}/${uploadId}.mp4`,
+              key: `${thingName}/${uploadId}.bin`,
             };
           });
           return { items: mapped, nextToken };
