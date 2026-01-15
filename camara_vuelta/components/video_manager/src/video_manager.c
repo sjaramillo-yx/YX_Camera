@@ -970,7 +970,7 @@ esp_err_t vman_getJSON(cJSON **vmanJSON) {
   if (*vmanJSON == NULL)
     goto end;
 
-  cJSON *sensor_info = cJSON_AddObjectToObject(*vmanJSON, "sensor");
+  cJSON *sensor_info = cJSON_AddObjectToObject(*vmanJSON, "sensorModel");
   if (sensor_info == NULL)
     goto end;
 
