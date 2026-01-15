@@ -8,6 +8,7 @@
 
 #include "mqtt_worker.h"
 #include "NVS_manager.h"
+#include "jobs_manager.h"
 #include "provision_claimer.h"
 #include "recording_worker.h"
 #include "s3_uploader.h"
@@ -85,6 +86,13 @@ static void mqtt_connected_handler(void *handler_args, esp_event_base_t base, in
   snprintf(topic_name, 1024, CONFIG_PROJ_BASE_NAME "/" CONFIG_PROJ_ENV_NAME "/recordings/%s/start",
            mqtt_cert_data.thing_name);
   esp_mqtt_client_subscribe(client, topic_name, 0);
+  // Jobs notify topics
+  snprintf(topic_name, 1024, "$aws/things/%s/jobs/notify-next", mqtt_cert_data.thing_name);
+  ESP_LOGD(TAG, "Subscribing to topic: %s", topic_name);
+  esp_mqtt_client_subscribe(client, topic_name, 0);
+  // Ask for pending jobs
+  ESP_LOGI(TAG, "Getting pending jobs for %s", mqtt_cert_data.thing_name);
+  jobs_get_pending(mqtt_cert_data.thing_name, "justConnected");
   // Connect the S3 uploader
   s3_uploader_on_connected();
   // Give the initialization semaphore
@@ -169,7 +177,23 @@ static void mqtt_data_handler(void *handler_args, esp_event_base_t base, int32_t
 
     goto cleanup;
   }
-  /* -- Ongoing upload commands -- */
+
+  /* -- AWS Jobs commands -- */
+  sprintf(topic_name, "$aws/things/%s/jobs/", mqtt_cert_data.thing_name);
+  if (strstr(received_topic, topic_name) != NULL) {
+    /// TODO: Handle payload being sent in multiple events
+    ESP_LOGD(TAG, "Passing %s to AWS jobs handler", received_topic);
+    jobs_data_handler(mqtt_cert_data.thing_name, event->data, event->data_len);
+    goto cleanup;
+  }
+  /* -- AWS MQTT file streams -- */
+  sprintf(topic_name, "$aws/things/%s/streams/", mqtt_cert_data.thing_name);
+  if (strstr(received_topic, topic_name) != NULL) {
+    /// TODO: Handle payload being sent in multiple events
+    ESP_LOGD(TAG, "Passing %s to AWS streams handler", received_topic);
+    jobs_stream_data_handler(mqtt_cert_data.thing_name, event->data, event->data_len);
+    goto cleanup;
+  }
 
 cleanup:
   if (payload)
@@ -283,9 +307,7 @@ static esp_err_t mqttworker_defaults(void) {
 }
 
 /*================== Public Functions ==================*/
-esp_err_t mqttworker_begin(void) {
-  /* Create the initialization semaphore */
-  mqtt_init_semphr = xSemaphoreCreateBinary();
+esp_err_t mqttworker_init(QueueHandle_t free_chunk_queue, QueueHandle_t filled_chunk_queue) {
   /* Check if certificates are in NVS */
   esp_err_t err = nvsman_begin();
   if (err == ESP_ERR_NVS_NOT_FOUND) {

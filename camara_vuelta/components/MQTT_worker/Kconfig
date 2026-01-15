@@ -95,3 +95,16 @@ menu "S3 Uploader"
     endmenu
 
 endmenu
+
+menu "AWS Jobs configuration"
+    menu "MQTT File Stream downloader configuration"
+        config DATA_BLOCK_COUNT
+            int "Number of data blocks to allocate for download"
+            default 5
+        
+        config DATA_BLOCK_SIZE
+            int "Length of the buffer allocated for each data block"
+            default 4096
+            range 256 131072
+    endmenu
+endmenu

@@ -1,0 +1,14 @@
+menu "OTA Manager"
+
+  config OTA_CHUNK_COUNT
+    int "Amount of OTA chunks allocated by the OTA Manager"
+    range 1 4
+    default 4
+  
+  config OTA_CHUNK_SIZE
+    int "Size of each OTA chunk in bytes"
+    range 256 131072
+    default 4096
+
+endmenu
+

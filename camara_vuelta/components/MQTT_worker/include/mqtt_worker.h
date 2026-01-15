@@ -13,6 +13,8 @@
 #include <esp_err.h>
 #include <esp_log.h>
 #include <esp_system.h>
+#include <mbedtls/pk.h>
+#include <mbedtls/x509_crt.h>
 #include <mqtt_client.h>
 /* Standard includes*/
 #include <cJSON.h>
@@ -26,7 +28,13 @@
 #pragma once
 
 /**
- * @brief Initialize the worker
+ * @brief Initialize the worker.
+ *
+ * @param free_chunk_queue The queue used to receive free chunks from the OTA Manager.
+ * @param filled_chunk_queue The queue to send filled chunks to the OTA Manager.
+ */
+esp_err_t mqttworker_init(QueueHandle_t free_chunk_queue, QueueHandle_t filled_chunk_queue);
+
  */
 esp_err_t mqttworker_begin(void);
 

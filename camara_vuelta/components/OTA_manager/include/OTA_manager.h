@@ -29,6 +29,17 @@ extern "C" {
 typedef esp_err_t (*component_test)(char *);
 
 /**
+ * @brief OTA Manager state machine
+ */
+typedef enum {
+  OTA_MAN_UNITIALIZED,
+  OTA_MAN_READY,
+  OTA_MAN_DOWNLOADING,
+  OTA_MAN_DONE,
+  OTA_MAN_ERROR
+} OTA_state_t;
+
+/**
  * @brief Run a component test. If the test fails, this function will write the resulting error
  * message to NVS before rolling back to previous valid partition.
  *
@@ -37,6 +48,23 @@ typedef esp_err_t (*component_test)(char *);
  * `esp_err_t` type value.
  */
 esp_err_t otaman_run_test(component_test test_function);
+
+/**
+ * @brief Check if OTA Manager can start a new OTA update process.
+ *
+ * @param image_size The size of the new binary image.
+ */
+esp_err_t otaman_can_start(uint32_t image_size);
+
+/**
+ * @brief Begin the OTA Update process
+ */
+esp_err_t otaman_start_update(uint32_t image_size);
+
+/**
+ * @brief Initalize the OTA Manager
+ */
+esp_err_t otaman_init();
 
 #ifdef __cplusplus
 }
