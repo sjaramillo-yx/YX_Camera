@@ -49,7 +49,7 @@ menu "S3 Uploader"
 
         config S3_MAX_TOPIC_LEN
             int "Max MQTT topic length"
-            default 256
+            default 512
             range 64 1024
 
         config S3_MAX_THING_NAME
