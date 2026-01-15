@@ -1,6 +1,6 @@
 # Upload Orchestrator Lambda (dynamic part sizing from DDB filesize)
 # - Computes part_size & total_parts using filesize found in the camera's item collection
-# - Looks for size on META first; else tries SK=Rec#<recordingId> with common attribute names
+# - Looks for size on META first; else tries SK=Rec#<transactionId> with common attribute names
 # - Hardened against stale MPUs (recreate if NoSuchUpload), consistent reads, IoT Data endpoint resolution
 
 import os, json, time, math, logging, boto3
@@ -152,9 +152,9 @@ def lambda_handler(event, _ctx):
     pk, sk = event["PK"], event["SK"]
     op     = (event.get("op") or event.get("deviceStatus") or "").lower()
     now_ms = int(event.get("receivedAt") or time.time()*1000)
-    rec_id = event.get("recordingId") or event.get("recording_id")
+    rec_id = event.get("transactionId") or event.get("recording_id")
 
-    log.info("recordingId is %s", rec_id)
+    log.info("transactionId is %s", rec_id)
     log.info("TABLE=%s", TABLE)
     log.info("boto3 region=%s", boto3.session.Session().region_name)
     log.info("caller=%s", boto3.client("sts").get_caller_identity())
@@ -207,7 +207,7 @@ def lambda_handler(event, _ctx):
             ddb.transact_write_items(TransactItems=[
                 {"Put": {"TableName": TABLE, "Item": {
                     "PK": _s(pk), "SK": _s(sk),
-                    "uploadId": _s(upid), "recordingId": _s(rec_id),
+                    "uploadId": _s(upid), "transactionId": _s(rec_id),
                     "thingName": _s(thing),
                     "s3UploadId": _s(s3_id),
                     "status": _s("initialized"),
@@ -261,8 +261,8 @@ def lambda_handler(event, _ctx):
                 for k in ("sizeBytes","filesize","fileSize","file_size","bytes","lengthBytes"):
                     v = meta.get(k)
                     if isinstance(v, int) and v > 0: file_size = v; break
-                if file_size is None and (event.get("recordingId") or event.get("recording_id")):
-                    rid = event.get("recordingId") or event.get("recording_id")
+                if file_size is None and (event.get("transactionId") or event.get("recording_id")):
+                    rid = event.get("transactionId") or event.get("recording_id")
                     file_size = get_recording_size_bytes(pk, rid)
                 if file_size:
                     ps, tp = choose_part_layout(file_size)
