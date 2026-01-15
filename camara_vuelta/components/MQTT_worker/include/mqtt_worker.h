@@ -35,8 +35,10 @@
  */
 esp_err_t mqttworker_init(QueueHandle_t free_chunk_queue, QueueHandle_t filled_chunk_queue);
 
+/**
+ * @brief Connect the worker to AWS.
  */
-esp_err_t mqttworker_begin(void);
+esp_err_t mqttworker_begin(int timeout_ms);
 
 /**
  * @brief Publish initial state information to AWS
@@ -52,3 +54,8 @@ esp_err_t mqttworker_publish_current_state(cJSON *sdJSON, bool is_recording);
  * @brief Publish ongoing recording state information to AWS
  */
 esp_err_t mqttworker_publish_recording_state(cJSON *recJSON);
+
+/**
+ * @brief Verify the certificates embedded into the binary image can be parsed.
+ */
+esp_err_t mqttworker_verify_flash_certs(void);

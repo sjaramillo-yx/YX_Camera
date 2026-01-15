@@ -62,9 +62,9 @@ static esp_mqtt_client_config_t mqtt_cfg = {
     .buffer      = {.size = 8192, .out_size = 8192}};
 
 /**
- * @brief The initialization semaphore
+ * @brief The connected semaphore
  */
-static SemaphoreHandle_t mqtt_init_semphr = NULL;
+static SemaphoreHandle_t mqtt_conn_semphr = NULL;
 
 /*================== Event Handlers ==================*/
 /**
@@ -82,7 +82,8 @@ static void mqtt_connected_handler(void *handler_args, esp_event_base_t base, in
   esp_mqtt_client_handle_t client           = event->client;
   char                     topic_name[1024] = "";
 
-  // Subscribe to relevant topics
+  /*----- Subscribe to relevant topics -----*/
+  // Recording start topic
   snprintf(topic_name, 1024, CONFIG_PROJ_BASE_NAME "/" CONFIG_PROJ_ENV_NAME "/recordings/%s/start",
            mqtt_cert_data.thing_name);
   esp_mqtt_client_subscribe(client, topic_name, 0);
@@ -95,8 +96,8 @@ static void mqtt_connected_handler(void *handler_args, esp_event_base_t base, in
   jobs_get_pending(mqtt_cert_data.thing_name, "justConnected");
   // Connect the S3 uploader
   s3_uploader_on_connected();
-  // Give the initialization semaphore
-  xSemaphoreGive(mqtt_init_semphr);
+  // Give the connected semaphore
+  xSemaphoreGive(mqtt_conn_semphr);
 }
 
 /**
@@ -306,8 +307,44 @@ static esp_err_t mqttworker_defaults(void) {
   return client != NULL ? ESP_OK : ESP_FAIL;
 }
 
+esp_err_t mqttworker_verify_flash_certs(void) {
+  int                ret = ESP_OK;
+  mbedtls_x509_crt   client;
+  mbedtls_pk_context key;
+
+  // Parse client certificate
+  mbedtls_x509_crt_init(&client);
+  ret = mbedtls_x509_crt_parse(&client, (const unsigned char *)client_cert_pem_start,
+                               strlen((const char *)client_cert_pem_start) + 1);
+  if (ret != 0) {
+    ESP_LOGE(TAG, "client cert parse failed: -0x%04X", (unsigned)(-ret));
+    mbedtls_x509_crt_free(&client);
+    return ESP_FAIL;
+  }
+  ESP_LOGI(TAG, "Client certificate in binary correctly parsed");
+
+  // Parse private key
+  mbedtls_pk_init(&key);
+  ret = mbedtls_pk_parse_key(&key, (const unsigned char *)client_key_pem_start,
+                             strlen((const char *)client_key_pem_start) + 1, NULL, 0, NULL, NULL);
+  if (ret != 0) {
+    ESP_LOGE(TAG, "client key parse failed: -0x%04X", (unsigned)(-ret));
+    mbedtls_pk_free(&key);
+    mbedtls_x509_crt_free(&client);
+    return ESP_FAIL;
+  }
+  ESP_LOGI(TAG, "Client key in binary correctly parsed");
+
+  mbedtls_pk_free(&key);
+  mbedtls_x509_crt_free(&client);
+  return ESP_OK;
+}
+
 /*================== Public Functions ==================*/
 esp_err_t mqttworker_init(QueueHandle_t free_chunk_queue, QueueHandle_t filled_chunk_queue) {
+  /* Create the connected semaphore */
+  mqtt_conn_semphr = xSemaphoreCreateBinary();
+
   /* Check if certificates are in NVS */
   esp_err_t err = nvsman_begin();
   if (err == ESP_ERR_NVS_NOT_FOUND) {
@@ -330,11 +367,16 @@ esp_err_t mqttworker_init(QueueHandle_t free_chunk_queue, QueueHandle_t filled_c
   /* Register the event handlers */
   esp_mqtt_client_register_event(client, MQTT_EVENT_CONNECTED, mqtt_connected_handler, NULL);
   esp_mqtt_client_register_event(client, MQTT_EVENT_DATA, mqtt_data_handler, NULL);
-  /* Get the recording event loop handle */
+  /* Get the event loop handles */
   /// TODO:  Check for errors
   rec_eventloop_get_handle(&rec_event_h);
-  ESP_ERROR_CHECK(esp_event_handler_instance_register_with(
-      rec_event_h, RECORDING_EVENTS, ESP_EVENT_ANY_ID, mqttworker_rec_handler, NULL, NULL));
+  ESP_RETURN_ON_ERROR(esp_event_handler_instance_register_with(rec_event_h, RECORDING_EVENTS,
+                                                               ESP_EVENT_ANY_ID,
+                                                               mqttworker_rec_handler, NULL, NULL),
+                      TAG, "Couldn't register recording events handler");
+  /* Initialize the jobs manager */
+  ESP_RETURN_ON_ERROR(jobs_init(client, free_chunk_queue, filled_chunk_queue), TAG,
+                      "Couldn't initialize the jobs manager");
   /* Initialize the uploader */
   s3uploader_cfg_t up_cfg = {
       .thing_name       = mqtt_cert_data.thing_name,
@@ -342,14 +384,23 @@ esp_err_t mqttworker_init(QueueHandle_t free_chunk_queue, QueueHandle_t filled_c
       .http_timeout_ms  = 20000,
       .http_put_retries = 3,
   };
-  ESP_ERROR_CHECK(s3uploader_init(client, &up_cfg));
-  /* Start MQTT event loop */
-  ESP_LOGI(TAG, "Conneting to endpoint: %s", CONFIG_AWS_ENDPOINT);
-  esp_mqtt_client_start(client);
-  /* Wait for the client to stablish a connection */
-  xSemaphoreTake(mqtt_init_semphr, portMAX_DELAY);
+  ESP_RETURN_ON_ERROR(s3uploader_init(client, &up_cfg), TAG,
+                      "Couldn't initialize the S3 uploader component");
 
   return err;
+}
+
+esp_err_t mqttworker_begin(int timeout_ms) {
+  esp_err_t ret = ESP_OK;
+  /* Start MQTT event loop */
+  ESP_LOGI(TAG, "Connecting to endpoint: %s", CONFIG_AWS_ENDPOINT);
+  ESP_RETURN_ON_ERROR(esp_mqtt_client_start(client), TAG, "Couldn't start the MQTT client");
+  /* Wait for the client to stablish a connection */
+  ret = xSemaphoreTake(mqtt_conn_semphr,
+                       timeout_ms > 0 ? pdMS_TO_TICKS(timeout_ms) : portMAX_DELAY) == pdTRUE
+            ? ESP_OK
+            : ESP_ERR_TIMEOUT;
+  return ret;
 }
 
 esp_err_t mqttworker_publish_initial_state(cJSON *sdJSON, cJSON *vmanJSON) {
@@ -367,10 +418,15 @@ esp_err_t mqttworker_publish_initial_state(cJSON *sdJSON, cJSON *vmanJSON) {
   cJSON_AddItemToObject(payload, "videoInfo", vmanJSON);
   cJSON_AddStringToObject(payload, "firmwareVersion", esp_app_get_description()->version);
   payload_str = cJSON_Print(payload);
-  int msg_id  = esp_mqtt_client_publish(
+  ESP_GOTO_ON_FALSE(payload_str != NULL, ESP_ERR_NO_MEM, cleanup, TAG,
+                    "No memory for the payload string");
+  int msg_id = esp_mqtt_client_publish(
       client, CONFIG_PROJ_BASE_NAME "/" CONFIG_PROJ_ENV_NAME "/cameras/hello", payload_str, 0, 1,
       0);
+  ESP_GOTO_ON_FALSE(msg_id >= 0, ESP_FAIL, cleanup, TAG, "Couldn't publish initial state (%d)",
+                    msg_id);
   ESP_LOGD(TAG, "sent publish successful, msg_id=%d", msg_id);
+cleanup:
   cJSON_free(payload_str);
   cJSON_Delete(payload);
   return ret;
