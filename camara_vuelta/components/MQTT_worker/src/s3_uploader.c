@@ -510,7 +510,7 @@ static bool parse_start_payload(const char *data, int len, start_msg_t *out) {
   if (!j)
     return false;
 
-  const cJSON *rid = cJSON_GetObjectItem(j, "recordingId");
+  const cJSON *rid = cJSON_GetObjectItem(j, "transactionId");
   if (!cJSON_IsString(rid))
     rid = cJSON_GetObjectItem(j, "recording_id");
 
