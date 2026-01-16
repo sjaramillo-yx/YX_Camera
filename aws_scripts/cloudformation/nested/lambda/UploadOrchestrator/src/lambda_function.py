@@ -194,9 +194,9 @@ def lambda_handler(event, _ctx):
                     ExpressionAttributeValues={":ps":_n(ps),":tp":_n(tp),":u":_n(now_ms)})
                 part_size, total_parts = ps, tp
         else:
-            log.info("MPU:create bucket=%s key=%s", BUCKET, key)
+            log.debug("MPU:create bucket=%s key=%s", BUCKET, key)
             s3_id = s3.create_multipart_upload(Bucket=BUCKET, Key=key)["UploadId"]
-            log.info("MPU:created uploadId=...%s", s3_id[-10:])
+            log.debug("MPU:created uploadId=...%s", s3_id[-10:])
             # Compute part layout
             if file_size:
                 ps, tp = choose_part_layout(file_size)
@@ -214,6 +214,7 @@ def lambda_handler(event, _ctx):
                     "startedAt": _n(now_ms), "updatedAt": _n(now_ms),
                     "partSize": _n(ps), "totalParts": _n(tp),
                     "nextPart": _n(1), "partsDone": _n(0),
+                    "s3Key": _s(key),
                     # store discovered filesize if we have it
                     **({"sizeBytes": _n(file_size)} if file_size else {})
                 }, "ConditionExpression": "attribute_not_exists(PK) AND attribute_not_exists(SK)"} },

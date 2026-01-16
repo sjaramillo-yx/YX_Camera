@@ -67,6 +67,7 @@ Resources:
         }
 
         type Recording {
+          thingName: String!
           currentBitrate: Int
           currentFPS: Int
           errorCode: String
@@ -104,7 +105,7 @@ Resources:
           updatedAt: AWSTimestamp
           completedAt: AWSTimestamp
           s3UploadId: String
-          key: String!
+          s3Key: String!
         }
 
         type UploadListPage {
@@ -119,6 +120,8 @@ Resources:
           listCameraStatuses(limit: Int, nextToken: String): CameraListPage!
           #  Returns recordings ordered by most-recently updated first
           listRecordings(limit: Int, nextToken: String): RecordingsList!
+          #  Returns recordings for a particular camera
+          listRecordingsByCamera(thingName: ID!, limit: Int, nextToken: String): RecordingsList!
           # Get details about a particular upload
           getUpload(thingName: ID!, uploadId: ID!): Upload
           # Returns uploads for a particular camera
@@ -459,6 +462,100 @@ Resources:
           return { items: mapped, nextToken };
         }
 
+  ListRecordingsByCameraResolver:
+    Type: AWS::AppSync::Resolver
+    DependsOn:
+      - GraphQLSchema
+      - CameraTableDataSource
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      TypeName: Query
+      FieldName: listRecordingsByCamera
+      Kind: UNIT
+      DataSourceName: !GetAtt CameraTableDataSource.Name
+      Runtime:
+        Name: APPSYNC_JS
+        RuntimeVersion: "1.0.0"
+      Code: |
+        import { util } from "@aws-appsync/utils";
+
+        export function request(ctx) {
+          const args = ctx.args ?? ctx.arguments ?? {};
+          const thingName = args.thingName;
+          if (!thingName) util.error("Missing thingName", "BadRequest");
+
+          const limit = args.limit ?? 50;
+          const nextToken = args.nextToken;
+
+          return {
+            operation: "Query",
+            query: {
+              expression: "#pk = :pk AND begins_with(#sk, :sk)",
+              expressionNames: { "#pk": "PK", "#sk": "SK" },
+              expressionValues: util.dynamodb.toMapValues({
+                ":pk": `Camera#${thingName}`,
+                ":sk": "Rec#",
+              }),
+            },
+            limit,
+            nextToken,
+            scanIndexForward: false,
+          };
+        }
+
+        export function response(ctx) {
+          const args = ctx.args ?? ctx.arguments ?? {};
+          const argThingName = args.thingName;
+
+          const { items = [], nextToken = null } = ctx.result ?? {};
+
+          const mapped = items.map((it) => {
+            const pk = it.PK;
+            const sk = it.SK;
+
+            const thingName =
+              argThingName ??
+              (typeof pk === "string" && pk.startsWith("Camera#") ? pk.slice("Camera#".length) : null);
+
+            const transactionId =
+              it.transactionId ??
+              (typeof sk === "string" && sk.startsWith("Rec#") ? sk.slice("Rec#".length) : null);
+
+            if (!thingName) util.error("Recording is missing thingName", "DataError");
+            if (!transactionId) util.error("Recording is missing transactionId", "DataError");
+
+            return {
+              thingName,
+              transactionId,
+              status: it.status ?? "UNKNOWN",
+
+              hres: it.hres ?? it.hRes,
+              vres: it.vres ?? it.vRes,
+
+              targetFPS: it.targetFPS ?? it.targetFps ?? it["target_fps"],
+              targetBitrate: it.targetBitrate ?? it.target_bitrate ?? it["target_bitrate"],
+
+              currentFPS: it.currentFPS ?? it.currentFps,
+              currentBitrate: it.currentBitrate ?? it.current_bitrate ?? it["current_bitrate"],
+
+              lengthSeconds:
+                it.lengthSeconds ?? it.duration ?? it.recordedSeconds ?? it.lengthSec,
+
+              filename: it.filename,
+              filesize: it.filesize,
+
+              updatedAt: it.updatedAt,
+
+              errorCode: it.errorCode,
+              errorMessage: it.errorMessage,
+              failedModule: it.failedModule,
+              errorTimestamp: it.errorTimestamp,
+            };
+          });
+
+          return { items: mapped, nextToken };
+        }
+
   GetUploadMetaFunction:
     Type: AWS::AppSync::FunctionConfiguration
     DependsOn:
@@ -584,7 +681,7 @@ Resources:
           const { thingName, uploadId, meta, partsUploaded = 0 } = ctx.stash;
           if (!meta) return null;
           const status = meta.status ?? "UNKNOWN";
-          const totalParts = meta.totalParts ?? 1;
+          const totalParts = meta.totalParts ?? 0;
           const partSize = meta.partSize ?? null;
           const nextPart = meta.nextPart ?? null;
           const uploaded = typeof meta.partsDone === "number" ? meta.partsDone : partsUploaded;
@@ -592,6 +689,7 @@ Resources:
           return {
             thingName,
             uploadId,
+            transactionId: meta.transactionId,
             status,
             partSize,
             totalParts,
@@ -602,7 +700,7 @@ Resources:
             updatedAt: meta.updatedAt,
             completedAt: meta.completedAt,
             s3UploadId: meta.s3UploadId,
-            key: `${thingName}/${uploadId}.mp4`,
+            s3Key: meta.s3Key,
           };
         }
       PipelineConfig:
@@ -644,6 +742,7 @@ Resources:
             return {
               thingName,
               uploadId,
+              transactionId: it.transactionId,
               status: it.status ?? "UNKNOWN",
               partSize: it.partSize,
               totalParts,
