@@ -71,6 +71,10 @@ def lambda_handler(event, context):
         set_attrs["updatedAt"] = _n(event["updatedAt"])
     if event.get("transactionId") is not None:
         set_attrs["transactionId"] = _s(event["transactionId"])
+    if event.get("filename") is not None:
+        set_attrs["filename"] = _s(event["filename"])
+    if event.get("filesize") is not None:
+        set_attrs["filesize"] = _s(event["filesize"])
 
     # Keep GSI1 current (if provided)
     if event.get("allRecordingsPk") is not None:
