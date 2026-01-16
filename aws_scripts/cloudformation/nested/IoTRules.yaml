@@ -65,13 +65,13 @@ Resources:
       # Local path; 'aws cloudformation package' uploads and rewrites.
       Code: lambda/UpdateOngoingRecording.zip
 
-  IotRecordingStatusOngoingRuleInvokePerm:
+  IotRecordingStatusRuleInvokePerm:
     Type: AWS::Lambda::Permission
     Properties:
       Action: "lambda:InvokeFunction"
       FunctionName: !Ref UpdateOngoingRecordingFunction
       Principal: "iot.amazonaws.com"
-      SourceArn: !GetAtt IotRecordingStatusOngoingRule.Arn
+      SourceArn: !GetAtt IotRecordingStatusRule.Arn
 
   IotCameraCurrentStatusRule:
     Type: AWS::IoT::TopicRule
@@ -131,7 +131,7 @@ Resources:
             concat('Camera#', cast(thingName as String)) AS PK,
             'info' AS SK,
             firmwareVersion,
-            videoInfo.sensor.name as sensor,
+            videoInfo.sensorModel.name as sensorModel,
             timestamp() AS updatedAt
           FROM '${ParentStackName}/${Environment}/cameras/hello'
           WHERE thingName = clientid()
@@ -203,6 +203,7 @@ Resources:
             @transaction  = topic(5),
             @isStart      = (status = 'STARTED'),
             @isDone       = (status = 'DONE'),
+            @isOngoing    = (status = 'ONGOING'),
             @isFail       = (status = 'ERROR'),
             @pk           = concat('Camera#', @thing)
           
@@ -219,6 +220,14 @@ Resources:
           
             CASE @isStart WHEN true THEN targetBitrate END AS targetBitrate,
             CASE @isStart WHEN true THEN targetFps     END AS targetFps,
+
+            CASE @isOngoing WHEN true THEN 'Recs#ALL'                                                  END AS allRecordingsPk,
+            CASE @isOngoing WHEN true THEN concat(cast(@nowMs as String), '#', @pk, '#', @transaction) END AS allRecordingsSk,
+            CASE @isOngoing WHEN true THEN 'Ongoing#ALL'                                               END AS ongoingRecordingsPk,
+            CASE @isOngoing WHEN true THEN concat(cast(@nowMs as String), '#', @pk, '#', @transaction) END AS ongoingRecordingsSk,
+            CASE @isOngoing WHEN true THEN bitrate                                                     END AS currentBitrate,
+            CASE @isOngoing WHEN true THEN fps                                                         END AS currentFPS,
+            CASE @isOngoing WHEN true THEN recordedSeconds                                             END AS lengthSec,
             
             CASE @isDone WHEN true THEN filename        END AS filename,
             CASE @isDone WHEN true THEN filesize        END AS filesize,
@@ -227,54 +236,11 @@ Resources:
             CASE @isFail WHEN true THEN errorCode END AS errorCode,
             CASE @isFail WHEN true THEN errorMessage END AS errorMessage,
             CASE @isFail WHEN true THEN errorOrigin END AS failedModule,
-            CASE @isFail WHEN true THEN timestamp END AS timestamp
+            CASE @isFail WHEN true THEN timestamp END AS errorTimestamp
           
           FROM '${ParentStackName}/${Environment}/recordings/+/+/status'
           WHERE
               @thing = clientid() AND status <> 'ONGOING'
-        Actions:
-          - DynamoDBv2:
-              RoleArn: !Ref DynamoRoleArn
-              PutItem:
-                TableName: !Ref DynamoTableName
-
-  IotRecordingStatusOngoingRule:
-    Type: AWS::IoT::TopicRule
-    Properties:
-      RuleName: !Sub "${ParentStackName}_RecordingStatusOngoing_${Environment}"
-      TopicRulePayload:
-        AwsIotSqlVersion: "2016-03-23"
-        RuleDisabled: false
-        Description: "Extracts the recording status from messages published by the camera during an ongoing recording"
-        Sql: !Sub |
-          SET
-            @nowMs        = timestamp(),
-            @day          = floor(@nowMs / 1000 / 86400),
-            @thing        = topic(4),
-            @transaction  = topic(5),
-            @pk           = concat('Camera#', @thing)
-          
-          SELECT
-            @pk AS PK,
-            concat('Rec#', @transaction) AS SK,
-          
-            @transaction   AS transactionId,
-            status  AS status,
-            @nowMs AS updatedAt,
-          
-            'Recs#ALL' AS allRecordingsPk,
-            concat(cast(@nowMs as String), '#', @pk, '#', @transaction) AS allRecordingsSk,
-          
-            'Ongoing#ALL' AS ongoingRecordingsPk,
-            concat(cast(@nowMs as String), '#', @pk, '#', @transaction) AS ongoingRecordingsSk,
-            
-            fps             AS currentFPS,
-            bitrate         AS currentBitrate,
-            recordedSeconds AS lengthSec
-           
-          FROM '${ParentStackName}/${Environment}/recordings/+/+/status'
-          WHERE
-              @thing = clientid() AND status = 'ONGOING' 
         Actions:
           - Lambda:
               FunctionArn: !GetAtt UpdateOngoingRecordingFunction.Arn
