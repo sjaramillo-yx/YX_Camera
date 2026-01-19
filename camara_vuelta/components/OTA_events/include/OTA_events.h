@@ -55,13 +55,15 @@ typedef struct ota_chunk_t {
  * @brief All the possible OTA events
  */
 typedef enum {
-  OTA_JOB_RECEIVED = 1,  // MQTT Worker received a new OTA Job
-  OTA_CTRL_START,
-  OTA_JOB_REJECTED,  // OTA Manager has rejected the OTA Job
+  OTA_JOB_RECEIVED = 1,  // MQTT Worker received a new OTA Job.
+  OTA_CTRL_START,        // OTA Manager has accepted the job, begin download.
+  OTA_JOB_REJECTED,      // OTA Manager has rejected the OTA Job.
   OTA_CTRL_PAUSE,
   OTA_CTRL_RESUME,
   OTA_CTRL_CANCEL,
-  OTA_CTRL_DONE,
+  OTA_CTRL_DONE,  // OTA Manager has finished applying the OTA update.
+  OTA_JOB_DONE,   // OTA partition has been validated, job finished.
+  OTA_JOB_ERROR,
 } OTA_event_t;
 
 /**
