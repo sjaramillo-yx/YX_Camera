@@ -25,6 +25,15 @@ extern "C" {
 
 /* ================ Globals ================ */
 static const char *TAG = "VueltaCAM";
+// Initialization success flags
+static esp_err_t ethman_inited;
+static esp_err_t mqtt_w_inited;
+static esp_err_t sd_mounted;
+static esp_err_t vman_inited;
+static esp_err_t hello_published;
+// Event loops
+static esp_event_loop_handle_t OTA_event_h;
+
 /*================== Static Functions ==================*/
 
 static esp_err_t publish_rec_state() {
