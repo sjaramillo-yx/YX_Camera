@@ -240,7 +240,7 @@ Resources:
           
           FROM '${ParentStackName}/${Environment}/recordings/+/+/status'
           WHERE
-              @thing = clientid() AND status <> 'ONGOING'
+              @thing = clientid()
         Actions:
           - Lambda:
               FunctionArn: !GetAtt UpdateOngoingRecordingFunction.Arn
