@@ -106,5 +106,13 @@ menu "AWS Jobs configuration"
             int "Length of the buffer allocated for each data block"
             default 4096
             range 256 131072
+        
+        config DATA_BLOCK_TIMEOUT_MS
+            int "Amount of milliseconds to wait for a data block before timing out"
+            default 120000
+
+        config DATA_BLOCK_MAX_RETRY
+            int "Max amount of retries when waiting for a data block"
+            default  5
     endmenu
 endmenu

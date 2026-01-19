@@ -1,4 +1,5 @@
 #include "jobs_manager.h"
+#include "mbedtls/base64.h"
 
 static const char *TAG = "AWSJobsManager"; /**< Logging tag for this module. */
 
@@ -98,8 +99,8 @@ static esp_err_t file_get_stream(char *thing_name, char *client_token, get_strea
   esp_err_t ret         = ESP_OK;
   cJSON    *payload     = cJSON_CreateObject();
   char     *payload_str = NULL;
-  char      topic_name[1024];
-  char      bitmap_str[1024];
+  char      topic_name[512];
+  char      bitmap_str[16];
 
   /// TODO: Validate ota_stream
   // Build the payload
@@ -108,15 +109,43 @@ static esp_err_t file_get_stream(char *thing_name, char *client_token, get_strea
   cJSON_AddNumberToObject(payload, "f", get_conf.file_id);
   cJSON_AddNumberToObject(payload, "l", get_conf.block_size);
   cJSON_AddNumberToObject(payload, "o", get_conf.block_offset);
-  if (get_conf.n_blocks >= 0) {
-    cJSON_AddNumberToObject(payload, "n", get_conf.n_blocks);
-  } else if (get_conf.block_bitmap >= 0) {
-    snprintf(bitmap_str, 1024, "%x", get_conf.block_bitmap);
-    cJSON_AddStringToObject(payload, "b", bitmap_str);
-  } else {
+
+  if ((get_conf.n_blocks <= 0) && (get_conf.block_bitmap <= 0)) {
     ESP_LOGE(TAG, "Either bitmap or number of blocks must be defined for stream get request");
     ret = ESP_ERR_INVALID_ARG;
     goto cleanup;
+  }
+  if (get_conf.n_blocks > 0) {
+    cJSON_AddNumberToObject(payload, "n", get_conf.n_blocks);
+  }
+  if (get_conf.block_bitmap > 0) {
+    /// Bitmap must be encoded to Base64
+    // Convert bitmap integer to little-endian bytes (LSB first) and base64-encode them.
+    uint32_t bm = (uint32_t)get_conf.block_bitmap;
+    uint8_t  bitmap_bytes[sizeof(bm)];
+    size_t   bitmap_len = 0;
+    // Minimal-length encoding (e.g., 0x1f -> {0x1f}, not {0x1f,0x00,0x00,0x00})
+    do {
+      bitmap_bytes[bitmap_len++]   = (uint8_t)(bm & 0xFF);
+      bm                         >>= 8;
+    } while (bm != 0 && bitmap_len < sizeof(bitmap_bytes));
+    // Base64 output size: 4*ceil(n/3) + 1 for null terminator
+    char   bitmap_b64[((sizeof(bitmap_bytes) + 2) / 3) * 4 + 1];
+    size_t b64_len = 0;
+    // Base64 encode using mbedtls
+    int rc = mbedtls_base64_encode((unsigned char *)bitmap_b64, sizeof(bitmap_b64), &b64_len,
+                                   bitmap_bytes, bitmap_len);
+    if (rc != 0) {
+      ESP_LOGE(TAG, "mbedtls_base64_encode failed: %d", rc);
+      ret = ESP_FAIL;
+      goto cleanup;
+    }
+    // Null terminate the string and add it to the payload
+    bitmap_b64[b64_len] = '\0';
+    cJSON_AddStringToObject(payload, "b", bitmap_b64);
+
+    ESP_LOGD(TAG, "Bitmap int=0x%x bytes_len=%u base64=%s", (unsigned)get_conf.block_bitmap,
+             (unsigned)bitmap_len, bitmap_b64);
   }
 
   // Publish the request
@@ -382,12 +411,12 @@ void download_task(void *arg) {
   ota_chunk_t  curr_chunk = {0};
   esp_err_t    ret;
   int          block_n;
-  get_stream_t get_conf        = {0};
-  uint8_t      received_blocks = 0b0000;
-  data_block_t data_block      = {0};
+  get_stream_t get_conf    = {0};
+  data_block_t data_block  = {0};
+  int          get_retries = 0;
 
   // Subscribe to relevant topics
-  char topic_name[1024];
+  char topic_name[512];
   sprintf(topic_name, "$aws/things/%s/streams/%s/data/json", ota_stream.thing_name,
           ota_stream.stream_id);
   ESP_GOTO_ON_FALSE(esp_mqtt_client_subscribe(mqtt_client, topic_name, 1) >= 0, ESP_FAIL, cleanup,
@@ -443,15 +472,37 @@ void download_task(void *arg) {
     ESP_LOGD(TAG, "Getting blocks %d-%d", CONFIG_DATA_BLOCK_COUNT * i,
              CONFIG_DATA_BLOCK_COUNT * i + (CONFIG_DATA_BLOCK_COUNT - 1));
     ESP_LOGD(TAG, "ThingName: %s, StreamID: %s", ota_stream.thing_name, ota_stream.stream_id);
-    file_get_stream(ota_stream.thing_name, "getOtaStreamTest", get_conf);
+    ESP_GOTO_ON_ERROR(file_get_stream(ota_stream.thing_name, "getOtaStreamTest", get_conf), cleanup,
+                      TAG, "Couldn't publish get stream request");
+    // Set the bitmap to all "1s" to track received blocks
+    get_conf.block_bitmap = 0 ^ ((1u << get_conf.n_blocks) - 1);
     ESP_LOGD(TAG, "Attempting to receive blocks %d-%d", CONFIG_DATA_BLOCK_COUNT * i,
              CONFIG_DATA_BLOCK_COUNT * i + (get_conf.n_blocks - 1));
     // Attempt to receive the blocks
     curr_chunk.len = 0;
     for (int j = 0; j < get_conf.n_blocks; j++) {
+      get_retries = 0;  // Reset the retry counter
       /// TODO: Handle receive timeouts
       ESP_LOGD(TAG, "Receiving block %d", CONFIG_DATA_BLOCK_COUNT * i + j);
-      xQueueReceive(s_filled_stream_data_q, &data_block, portMAX_DELAY);
+      while (xQueueReceive(s_filled_stream_data_q, &data_block,
+                           pdMS_TO_TICKS(CONFIG_DATA_BLOCK_TIMEOUT_MS)) != pdTRUE) {
+        if (get_retries < CONFIG_DATA_BLOCK_MAX_RETRY) {
+          ESP_LOGW(TAG, "Data block receive timed out, retrying (%s/%s)", get_retries,
+                   CONFIG_DATA_BLOCK_MAX_RETRY);
+          ESP_GOTO_ON_ERROR(file_get_stream(ota_stream.thing_name, "getOtaStreamTest", get_conf),
+                            cleanup, TAG, "Couldn't publish get stream request");
+          ESP_LOGD(TAG, "Retry sent");
+          get_retries++;
+        } else {
+          ESP_LOGW(TAG, "Max timeouts reached, waiting for notification");
+          ulTaskNotifyTake(true, portMAX_DELAY);  // Wait to be notified
+          ESP_GOTO_ON_ERROR(file_get_stream(ota_stream.thing_name, "getOtaStreamTest", get_conf),
+                            cleanup, TAG, "Couldn't publish get stream request");
+          break;  // break the while loop
+        }
+        /// TODO: After a certain amount of retries, pause the job and wait for a notification
+        continue;
+      };
       // Add this block buffer to the hash
       mbedtls_sha256_update(&s_sha_ctx, (unsigned char *)data_block.data, data_block.len);
       ESP_LOGV(TAG, "Received chunk with buffer at %p", curr_chunk.data);
@@ -461,6 +512,8 @@ void download_task(void *arg) {
       curr_chunk.len += data_block.len;
       // Send the data block to the free queue
       xQueueSendToBack(s_free_stream_data_q, &data_block, portMAX_DELAY);
+      // Flip the bit for this block
+      get_conf.block_bitmap ^= 1u << (data_block.index % CONFIG_DATA_BLOCK_COUNT);
       // Check for last block received
       if (data_block.index + 1 >= block_n)
         curr_chunk.last = true;
@@ -578,19 +631,28 @@ esp_err_t jobs_data_handler(const char *thing_name, const char *data, int data_l
     char *job_document = strstr(data, "jobDocument");
     /// TODO: Use the clientToken for this
     if (job_document == NULL) {
-      memset(&ota_stream, 0, sizeof(ota_stream_t));  // Reset the OTA stream structure
       // If the payload doesn't contain a Job Document, search for the Job ID
-      char *job_id = strstr(data, "jobId");
+      ESP_LOGD(TAG, "Payload: %.*s", data_len, data);
+      // First, look for jobs already in progress
+      char *pending_jobs = strstr(data, "inProgressJobs");
+      char *job_id       = strstr(data, "jobId");
       /// TODO: Check if job_id is NULL
       job_id             += strlen("\"jobID\":");
       size_t job_id_len   = strstr(job_id, "\"") - job_id;
       job_id[job_id_len]  = '\0';
-      strlcpy(ota_stream.job_id, job_id,
-              sizeof(ota_stream.job_id) <= job_id_len ? sizeof(ota_stream.job_id) : job_id_len + 1);
-      ESP_LOGD(TAG, "job_id is %s", ota_stream.job_id);
-      // Ask for the Job Document
-      ESP_RETURN_ON_ERROR(jobs_describe_job(thing_name, "getJob", ota_stream.job_id), TAG,
-                          "Couldn't describe job");
+      if (pending_jobs && !strcmp(job_id, ota_stream.job_id)) {
+        ESP_LOGW(TAG, "This OTA Job is already in progress");
+        /// TODO: Resume OTA job
+      } else {
+        // memset(&ota_stream, 0, sizeof(ota_stream_t));  // Reset the OTA stream structure
+        strlcpy(ota_stream.job_id, job_id,
+                sizeof(ota_stream.job_id) <= job_id_len ? sizeof(ota_stream.job_id)
+                                                        : job_id_len + 1);
+        ESP_LOGD(TAG, "job_id is %s", ota_stream.job_id);
+        // Ask for the Job Document
+        ESP_RETURN_ON_ERROR(jobs_describe_job(thing_name, "getJob", ota_stream.job_id), TAG,
+                            "Couldn't describe job");
+      }
     } else {
       /// TODO: Turn this into a function
       job_document +=
@@ -598,8 +660,8 @@ esp_err_t jobs_data_handler(const char *thing_name, const char *data, int data_l
       // Find the end of the job_document
       size_t job_document_size  = data_len - (int)(job_document - data);
       job_document_size        -= 2;  // Job Document is inside two nesting levels
-      ESP_LOGD(TAG, "Event data starts at %p and contains %d bytes", data, data_len);
-      ESP_LOGD(TAG, "Job document starts at %p and contains %d bytes", job_document,
+      ESP_LOGV(TAG, "Event data starts at %p and contains %d bytes", data, data_len);
+      ESP_LOGV(TAG, "Job document starts at %p and contains %d bytes", job_document,
                job_document_size);
       ESP_LOGD(TAG, "Job document: %.*s", 20, job_document);
       ESP_RETURN_ON_ERROR(jobs_parse_ota_job(job_document, job_document_size, &ota_stream), TAG,
