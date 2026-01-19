@@ -105,7 +105,7 @@ Resources:
           updatedAt: AWSTimestamp
           completedAt: AWSTimestamp
           s3UploadId: String
-          s3Key: String!
+          s3Key: String
         }
 
         type UploadListPage {
@@ -753,7 +753,7 @@ Resources:
               updatedAt: it.updatedAt,
               completedAt: it.completedAt,
               s3UploadId: it.s3UploadId,
-              key: `${thingName}/${uploadId}.bin`,
+              s3Key: it.s3Key,
             };
           });
           return { items: mapped, nextToken };
