@@ -126,7 +126,8 @@ static void mqtt_subscribed_handler(void *handler_args, esp_event_base_t base, i
   default:
     break;
   }
-  cJSON_Delete(payload);
+  if (payload)
+    cJSON_Delete(payload);
 }
 
 /**
@@ -183,7 +184,8 @@ static void mqtt_data_handler(void *handler_args, esp_event_base_t base, int32_t
   default:
     break;
   }
-  cJSON_Delete(payload);
+  if (payload)
+    cJSON_Delete(payload);
 }
 
 /*--------------- FreeRTOS Tasks ---------------*/

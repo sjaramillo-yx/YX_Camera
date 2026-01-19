@@ -238,7 +238,8 @@ static void mqttworker_rec_handler(void *handler_arg, esp_event_base_t event_bas
     topic_name[sizeof(topic_name) - 1] = '\0';
     payload_str                        = cJSON_Print(payload);
     msg_id = esp_mqtt_client_publish(client, topic_name, payload_str, 0, 1, 0);
-    cJSON_free(payload_str);
+    if (payload_str)
+      cJSON_free(payload_str);
     ESP_LOGD(TAG, "sent publish successful, msg_id=%d", msg_id);
     break;
 
@@ -257,7 +258,8 @@ static void mqttworker_rec_handler(void *handler_arg, esp_event_base_t event_bas
              mqtt_cert_data.thing_name, rec_conf.transaction_id);
     payload_str = cJSON_Print(payload);
     msg_id      = esp_mqtt_client_publish(client, topic_name, payload_str, 0, 1, 0);
-    cJSON_free(payload_str);
+    if (payload_str)
+      cJSON_free(payload_str);
     ESP_LOGD(TAG, "sent publish successful, msg_id=%d", msg_id);
     // Unsubscribe from the recording topic
     esp_mqtt_client_unsubscribe(client, topic_name);
@@ -285,12 +287,13 @@ static void mqttworker_rec_handler(void *handler_arg, esp_event_base_t event_bas
               sizeof(topic_name));
     }
     msg_id = esp_mqtt_client_publish(client, topic_name, payload_str, 0, 1, 0);
-    cJSON_free(payload_str);
+    if (payload_str)
+      cJSON_free(payload_str);
     ESP_LOGD(TAG, "sent publish successful, msg_id=%d", msg_id);
     break;
   }
-
-  cJSON_Delete(payload);
+  if (payload)
+    cJSON_Delete(payload);
 }
 
 /*================== Statics ==================*/
@@ -427,8 +430,10 @@ esp_err_t mqttworker_publish_initial_state(cJSON *sdJSON, cJSON *vmanJSON) {
                     msg_id);
   ESP_LOGD(TAG, "sent publish successful, msg_id=%d", msg_id);
 cleanup:
-  cJSON_free(payload_str);
-  cJSON_Delete(payload);
+  if (payload_str)
+    cJSON_free(payload_str);
+  if (payload)
+    cJSON_Delete(payload);
   return ret;
   /// TODO: Handle errors
 }
@@ -452,8 +457,10 @@ esp_err_t mqttworker_publish_current_state(cJSON *sdJSON, bool is_recording) {
       client, CONFIG_PROJ_BASE_NAME "/" CONFIG_PROJ_ENV_NAME "/cameras/status", payload_str, 0, 1,
       0);
   ESP_LOGD(TAG, "sent publish successful, msg_id=%d", msg_id);
-  cJSON_free(payload_str);
-  cJSON_Delete(payload);
+  if (payload_str)
+    cJSON_free(payload_str);
+  if (payload)
+    cJSON_Delete(payload);
   return ret;
   /// TODO: Handle errors
 }
@@ -469,8 +476,10 @@ esp_err_t mqttworker_publish_recording_state(cJSON *recJSON) {
            mqtt_cert_data.thing_name, rec_conf.transaction_id);
   int msg_id = esp_mqtt_client_publish(client, topic_name, payload_str, 0, 1, 0);
   ESP_LOGD(TAG, "sent publish successful, msg_id=%d", msg_id);
-  cJSON_free(payload_str);
-  cJSON_Delete(recJSON);
+  if (payload_str)
+    cJSON_free(payload_str);
+  if (recJSON)
+    cJSON_Delete(recJSON);
   return ret;
   /// TODO: Handle errors
 }

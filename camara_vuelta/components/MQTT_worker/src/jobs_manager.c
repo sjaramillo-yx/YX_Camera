@@ -89,7 +89,8 @@ static esp_err_t file_describe_stream(esp_mqtt_client_handle_t client, char *thi
 cleanup:
   if (payload_str)
     cJSON_free(payload_str);
-  cJSON_Delete(payload);
+  if (payload)
+    cJSON_Delete(payload);
   return ret;
 }
 
@@ -128,7 +129,8 @@ static esp_err_t file_get_stream(char *thing_name, char *client_token, get_strea
 cleanup:
   if (payload_str)
     cJSON_free(payload_str);
-  cJSON_Delete(payload);
+  if (payload)
+    cJSON_Delete(payload);
   return ret;
 }  // end file_get_stream
 
@@ -172,7 +174,8 @@ static esp_err_t jobs_update_job_status(char *job_id, job_status_t new_status, c
 cleanup:
   if (payload_str)
     cJSON_free(payload_str);
-  cJSON_Delete(payload);
+  if (payload)
+    cJSON_Delete(payload);
   return ret;
 }
 
@@ -247,7 +250,8 @@ static esp_err_t file_process_ota_data(char *buf, int buflen) {
   xQueueSendToBack(s_filled_stream_data_q, &data_block, portMAX_DELAY);
 
 cleanup:
-  cJSON_Delete(ota_data);
+  if (ota_data)
+    cJSON_Delete(ota_data);
   return ret;
 }
 
@@ -525,7 +529,8 @@ esp_err_t jobs_get_pending(char *thing_name, char *client_token) {
 cleanup:
   if (payload_str)
     cJSON_free(payload_str);
-  cJSON_Delete(payload);
+  if (payload)
+    cJSON_Delete(payload);
   return ret;
 }
 
@@ -549,8 +554,10 @@ esp_err_t jobs_describe_job(char *thing_name, char *client_token, char *job_id) 
                     ESP_FAIL, cleanup, TAG, "Failed publishing payload to topic %s", topic_name);
 
 cleanup:
-  cJSON_free(payload_str);
-  cJSON_Delete(payload);
+  if (payload_str)
+    cJSON_free(payload_str);
+  if (payload)
+    cJSON_Delete(payload);
   return ret;
 }  // end jobs_describe_job
 

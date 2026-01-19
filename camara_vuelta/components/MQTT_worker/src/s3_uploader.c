@@ -122,7 +122,8 @@ static esp_err_t publish_json(const char *topic, cJSON *obj, int qos) {
   ESP_RETURN_ON_FALSE(payload_str != NULL, ESP_FAIL, TAG, "cJSON print failed");
 
   int msg_id = esp_mqtt_client_publish(client, topic, payload_str, 0, qos, 0);
-  cJSON_free(payload_str);
+  if (payload_str)
+    cJSON_free(payload_str);
   ESP_RETURN_ON_FALSE(msg_id >= 0, ESP_FAIL, TAG, "mqtt publish failed");
   return ESP_OK;
 }
