@@ -1,0 +1,11 @@
+*keys.json
+*Keys.json
+*.pem
+*.key
+*.meta.json
+__pycache__
+*.packaged.yaml
+*.packaged.json
+*.zip
+.build
+.rendered
