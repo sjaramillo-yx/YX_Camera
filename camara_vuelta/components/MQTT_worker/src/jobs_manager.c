@@ -144,7 +144,7 @@ static esp_err_t file_get_stream(char *thing_name, char *client_token, get_strea
     bitmap_b64[b64_len] = '\0';
     cJSON_AddStringToObject(payload, "b", bitmap_b64);
 
-    ESP_LOGD(TAG, "Bitmap int=0x%x bytes_len=%u base64=%s", (unsigned)get_conf.block_bitmap,
+    ESP_LOGV(TAG, "Bitmap int=0x%x bytes_len=%u base64=%s", (unsigned)get_conf.block_bitmap,
              (unsigned)bitmap_len, bitmap_b64);
   }
 
@@ -486,23 +486,21 @@ void download_task(void *arg) {
       ESP_LOGD(TAG, "Receiving block %d", CONFIG_DATA_BLOCK_COUNT * i + j);
       while (xQueueReceive(s_filled_stream_data_q, &data_block,
                            pdMS_TO_TICKS(CONFIG_DATA_BLOCK_TIMEOUT_MS)) != pdTRUE) {
-        if (get_retries < CONFIG_DATA_BLOCK_MAX_RETRY) {
-          ESP_LOGW(TAG, "Data block receive timed out, retrying (%s/%s)", get_retries,
+        if (++get_retries <= CONFIG_DATA_BLOCK_MAX_RETRY) {
+          ESP_LOGW(TAG, "Data block receive timed out, retrying (%d/%d)", get_retries,
                    CONFIG_DATA_BLOCK_MAX_RETRY);
-          ESP_GOTO_ON_ERROR(file_get_stream(ota_stream.thing_name, "getOtaStreamTest", get_conf),
-                            cleanup, TAG, "Couldn't publish get stream request");
+          file_get_stream(ota_stream.thing_name, "getOtaStreamTest", get_conf);
           ESP_LOGD(TAG, "Retry sent");
-          get_retries++;
         } else {
           ESP_LOGW(TAG, "Max timeouts reached, waiting for notification");
           ulTaskNotifyTake(true, portMAX_DELAY);  // Wait to be notified
           ESP_GOTO_ON_ERROR(file_get_stream(ota_stream.thing_name, "getOtaStreamTest", get_conf),
                             cleanup, TAG, "Couldn't publish get stream request");
           break;  // break the while loop
-        }
+        }  // end if
         /// TODO: After a certain amount of retries, pause the job and wait for a notification
         continue;
-      };
+      };  // end while
       // Add this block buffer to the hash
       mbedtls_sha256_update(&s_sha_ctx, (unsigned char *)data_block.data, data_block.len);
       ESP_LOGV(TAG, "Received chunk with buffer at %p", curr_chunk.data);
@@ -642,6 +640,14 @@ esp_err_t jobs_data_handler(const char *thing_name, const char *data, int data_l
       job_id[job_id_len]  = '\0';
       if (pending_jobs && !strcmp(job_id, ota_stream.job_id)) {
         ESP_LOGW(TAG, "This OTA Job is already in progress");
+        if (s_download_task_h != NULL && eTaskGetState(s_download_task_h) != eDeleted) {
+          xTaskNotify(s_download_task_h, 0, eNoAction);
+          ESP_LOGD(TAG, "Notified download task");
+        } else {
+          ESP_LOGD(TAG, "Creating the download task");
+          xTaskCreate(download_task, "down.task", 5120, NULL, 10, &s_download_task_h);
+          ESP_LOGD(TAG, "Download task created");
+        }
         /// TODO: Resume OTA job
       } else {
         // memset(&ota_stream, 0, sizeof(ota_stream_t));  // Reset the OTA stream structure
