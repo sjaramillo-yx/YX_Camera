@@ -1,6 +1,9 @@
 #include "jobs_manager.h"
 #include "mbedtls/base64.h"
 
+#include <stdlib.h>
+#include <string.h>
+
 static const char *TAG = "AWSJobsManager"; /**< Logging tag for this module. */
 
 /* ================ STRUCTS ================ */
@@ -360,9 +363,10 @@ static esp_err_t jobs_parse_ota_job(const char *job_document, size_t doc_len,
   ESP_GOTO_ON_FALSE(out_stream != NULL, ESP_ERR_INVALID_ARG, cleanup, TAG,
                     "%s out_stream can't be NULL!", __func__);
   // Copy the streamID
-  strncpy(out_stream->stream_id,
-          cJSON_GetStringValue(cJSON_GetObjectItem(afr_ota_json, "streamname")),
-          sizeof(out_stream->stream_id));
+  const char *stream_name = cJSON_GetStringValue(cJSON_GetObjectItem(afr_ota_json, "streamname"));
+  ESP_GOTO_ON_FALSE(stream_name != NULL, ESP_ERR_INVALID_ARG, cleanup, TAG,
+                    "Missing streamname");
+  strlcpy(out_stream->stream_id, stream_name, sizeof(out_stream->stream_id));
   // Copy the file information to the stream struct
   cJSON *file = cJSON_GetArrayItem(cJSON_GetObjectItem(afr_ota_json, "files"), 0);
   ESP_GOTO_ON_FALSE(file != NULL, ESP_ERR_INVALID_ARG, cleanup, TAG,
@@ -373,9 +377,10 @@ static esp_err_t jobs_parse_ota_job(const char *job_document, size_t doc_len,
   out_stream->filesize   = cJSON_GetNumberValue(cJSON_GetObjectItem(file, "filesize"));
   out_stream->file_index = cJSON_GetNumberValue(cJSON_GetObjectItem(file, "fileid"));
   ESP_LOGD(TAG, "fileid: %d, filesize: %d", out_stream->file_index, out_stream->filesize);
-  strncpy(out_stream->file_signature,
-          cJSON_GetStringValue(cJSON_GetObjectItem(file, "sig-sha256-ecdsa")),
-          sizeof(out_stream->file_signature));
+  const char *file_sig = cJSON_GetStringValue(cJSON_GetObjectItem(file, "sig-sha256-ecdsa"));
+  ESP_GOTO_ON_FALSE(file_sig != NULL, ESP_ERR_INVALID_ARG, cleanup, TAG,
+                    "Missing file signature");
+  strlcpy(out_stream->file_signature, file_sig, sizeof(out_stream->file_signature));
 
 cleanup:
   if (job_json)
@@ -620,60 +625,84 @@ esp_err_t jobs_data_handler(const char *thing_name, const char *data, int data_l
     OTA_eventloop_get_handle(&OTA_event_h);
   esp_err_t ret = ESP_OK;
   char      topic_name[256];
+  char     *data_copy = NULL;
 
-  job_class_t job_class = jobs_get_job_class(data);
+  ESP_RETURN_ON_FALSE(data != NULL && data_len > 0, ESP_ERR_INVALID_ARG, TAG,
+                      "Empty job data payload");
+  data_copy = (char *)malloc((size_t)data_len + 1);
+  ESP_RETURN_ON_FALSE(data_copy != NULL, ESP_ERR_NO_MEM, TAG, "Failed to alloc job data copy");
+  memcpy(data_copy, data, (size_t)data_len);
+  data_copy[data_len] = '\0';
+
+  job_class_t job_class = jobs_get_job_class(data_copy);
   ESP_LOGD(TAG, "This Job is a%s job",
            job_class == OTA_UPDATE ? "n OTA_UPDATE"
                                    : (job_class == VIDEO_UPLOAD ? " VIDEO_UPLOAD" : "n INVALID"));
 
   if (job_class == OTA_UPDATE) {
     // Search for the Job Document
-    char *job_document = strstr(data, "jobDocument");
+    char *job_document = strstr(data_copy, "jobDocument");
     /// TODO: Use the clientToken for this
     if (job_document == NULL) {
       // If the payload doesn't contain a Job Document, search for the Job ID
-      ESP_LOGD(TAG, "Payload: %.*s", data_len, data);
+      ESP_LOGD(TAG, "Payload: %.*s", data_len, data_copy);
       // First, look for jobs already in progress
-      char *pending_jobs = strstr(data, "inProgressJobs");
-      char *job_id       = strstr(data, "jobId");
-      /// TODO: Check if job_id is NULL
-      job_id             += strlen("\"jobID\":");
-      size_t job_id_len   = strstr(job_id, "\"") - job_id;
-      job_id[job_id_len]  = '\0';
+      char *pending_jobs = strstr(data_copy, "inProgressJobs");
+      char *job_id       = strstr(data_copy, "\"jobId\"");
+      if (job_id == NULL) {
+        ESP_LOGW(TAG, "No jobId found in payload");
+        goto cleanup;
+      }
+      job_id = strchr(job_id, ':');
+      if (job_id == NULL) {
+        ESP_LOGW(TAG, "Malformed jobId payload");
+        goto cleanup;
+      }
+      job_id++;
+      while (*job_id == ' ' || *job_id == '\"') {
+        job_id++;
+      }
+      char *job_id_end = strchr(job_id, '\"');
+      if (job_id_end == NULL) {
+        ESP_LOGW(TAG, "Malformed jobId value");
+        goto cleanup;
+      }
+      *job_id_end = '\0';
       if (pending_jobs && !strcmp(job_id, ota_stream.job_id)) {
         ESP_LOGW(TAG, "This OTA Job is already in progress");
         /// TODO: Resume OTA job
       } else {
         // memset(&ota_stream, 0, sizeof(ota_stream_t));  // Reset the OTA stream structure
+        size_t job_id_len = strlen(job_id);
         strlcpy(ota_stream.job_id, job_id,
                 sizeof(ota_stream.job_id) <= job_id_len ? sizeof(ota_stream.job_id)
                                                         : job_id_len + 1);
         ESP_LOGD(TAG, "job_id is %s", ota_stream.job_id);
         // Ask for the Job Document
-        ESP_RETURN_ON_ERROR(jobs_describe_job(thing_name, "getJob", ota_stream.job_id), TAG,
-                            "Couldn't describe job");
+        ESP_GOTO_ON_ERROR(jobs_describe_job(thing_name, "getJob", ota_stream.job_id), cleanup, TAG,
+                          "Couldn't describe job");
       }
     } else {
       /// TODO: Turn this into a function
       job_document +=
           strlen("\"jobDocument\":") - 1;  // strlen will return 1 more than expected (\0)
       // Find the end of the job_document
-      size_t job_document_size  = data_len - (int)(job_document - data);
+      size_t job_document_size  = data_len - (int)(job_document - data_copy);
       job_document_size        -= 2;  // Job Document is inside two nesting levels
-      ESP_LOGV(TAG, "Event data starts at %p and contains %d bytes", data, data_len);
+      ESP_LOGV(TAG, "Event data starts at %p and contains %d bytes", data_copy, data_len);
       ESP_LOGV(TAG, "Job document starts at %p and contains %d bytes", job_document,
                job_document_size);
       ESP_LOGD(TAG, "Job document: %.*s", 20, job_document);
-      ESP_RETURN_ON_ERROR(jobs_parse_ota_job(job_document, job_document_size, &ota_stream), TAG,
-                          "Couldn't parse OTA job");
+      ESP_GOTO_ON_ERROR(jobs_parse_ota_job(job_document, job_document_size, &ota_stream), cleanup,
+                        TAG, "Couldn't parse OTA job");
       ESP_LOGD(TAG, "JobDocument parsed. StreamID is %s", ota_stream.stream_id);
       // Subscribe to Job status update topics
       sprintf(topic_name, "$aws/things/%s/jobs/%s/update/accepted", thing_name, ota_stream.job_id);
-      ESP_RETURN_ON_FALSE(esp_mqtt_client_subscribe(mqtt_client, topic_name, 1) >= 0, ESP_FAIL, TAG,
-                          "Couldn't subscribe to %s", topic_name);
+      ESP_GOTO_ON_FALSE(esp_mqtt_client_subscribe(mqtt_client, topic_name, 1) >= 0, ESP_FAIL,
+                        cleanup, TAG, "Couldn't subscribe to %s", topic_name);
       sprintf(topic_name, "$aws/things/%s/jobs/%s/update/rejected", thing_name, ota_stream.job_id);
-      ESP_RETURN_ON_FALSE(esp_mqtt_client_subscribe(mqtt_client, topic_name, 1) >= 0, ESP_FAIL, TAG,
-                          "Couldn't subscribe to %s", topic_name);
+      ESP_GOTO_ON_FALSE(esp_mqtt_client_subscribe(mqtt_client, topic_name, 1) >= 0, ESP_FAIL,
+                        cleanup, TAG, "Couldn't subscribe to %s", topic_name);
       // Begin the download
       strlcpy(ota_stream.thing_name, thing_name, sizeof(ota_stream.thing_name));
       ota_stream.client = mqtt_client;
@@ -683,19 +712,30 @@ esp_err_t jobs_data_handler(const char *thing_name, const char *data, int data_l
     }  // end if (job_document == NULL)
   }  // end if(job_class == OTA_UPDATE)
 
+cleanup:
+  if (data_copy) {
+    free(data_copy);
+  }
   return ret;
 }  // end jobs_data_handler
 
 esp_err_t jobs_stream_data_handler(const char *thing_name, const char *data, int data_len) {
   esp_err_t ret = ESP_OK;
+  char     *data_copy = NULL;
+  ESP_RETURN_ON_FALSE(data != NULL && data_len > 0, ESP_ERR_INVALID_ARG, TAG,
+                      "Empty stream data payload");
+  data_copy = (char *)malloc((size_t)data_len + 1);
+  ESP_RETURN_ON_FALSE(data_copy != NULL, ESP_ERR_NO_MEM, TAG, "Failed to alloc stream data copy");
+  memcpy(data_copy, data, (size_t)data_len);
+  data_copy[data_len] = '\0';
   /// TODO: Write a "get clientToken" function for this
   /// TODO: Make clientTokens KConfig options
-  if (strstr(data, "describeStream")) {
+  if (strstr(data_copy, "describeStream")) {
     // If the "describeStream" clientToken was found
-    ESP_LOGD(TAG, "%.*s", data_len, data);
+    ESP_LOGD(TAG, "%.*s", data_len, data_copy);
     ESP_LOGD(TAG, "This is a Stream description message, parsing");
-    ESP_RETURN_ON_ERROR(file_parse_stream_description(data, data_len, &ota_stream), TAG,
-                        "Couldn't parse stream description");
+    ESP_GOTO_ON_ERROR(file_parse_stream_description(data_copy, data_len, &ota_stream), cleanup, TAG,
+                      "Couldn't parse stream description");
     ESP_LOGD(TAG, "Stream version:%d, File index:%d, File size: %lu", ota_stream.stream_version,
              ota_stream.file_index, ota_stream.filesize);
     /// TODO: Begin OTA download
@@ -709,13 +749,17 @@ esp_err_t jobs_stream_data_handler(const char *thing_name, const char *data, int
     xTaskCreate(download_task, "down.task", 5120, NULL, 10, &s_download_task_h);
     ESP_LOGD(TAG, "Download task created");
     // file_process_ota_stream(&ota_stream);
-  } else if (strstr(data, "getOtaStream")) {
+  } else if (strstr(data_copy, "getOtaStream")) {
     // If the "describeStream" clientToken was found
     ESP_LOGD(TAG, "This is a Stream data message");
-    file_process_ota_data(data, data_len);
-  } else if (strstr(data, "updateJob")) {
+    file_process_ota_data(data_copy, data_len);
+  } else if (strstr(data_copy, "updateJob")) {
     ESP_LOGD(TAG, "This is a Job status update response");
-    ESP_LOGD(TAG, "%.*s", data_len, data);
+    ESP_LOGD(TAG, "%.*s", data_len, data_copy);
+  }
+cleanup:
+  if (data_copy) {
+    free(data_copy);
   }
   return ret;
 }
