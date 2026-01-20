@@ -169,10 +169,11 @@ static esp_err_t jobs_update_job_status(char *job_id, job_status_t new_status, c
   char     *payload_str = NULL;
   char      topic_name[1024];
 
-  ESP_GOTO_ON_FALSE(job_id != NULL, ESP_ERR_INVALID_ARG, cleanup, TAG, "Job ID can't be NULL!");
-  ESP_GOTO_ON_FALSE(ota_stream.thing_name != NULL, ESP_ERR_INVALID_ARG, cleanup, TAG,
-                    "Thing name can't be NULL!");
-  ESP_GOTO_ON_FALSE(new_status > IN_PROGRESS || new_status < REJECTED, ESP_ERR_INVALID_ARG, cleanup,
+  ESP_GOTO_ON_FALSE(job_id != NULL && job_id[0] != '\0', ESP_ERR_INVALID_ARG, cleanup, TAG,
+                    "Job ID can't be NULL!");
+  ESP_GOTO_ON_FALSE(ota_stream.thing_name != NULL && ota_stream.thing_name[0] != '\0',
+                    ESP_ERR_INVALID_ARG, cleanup, TAG, "Thing name can't be NULL!");
+  ESP_GOTO_ON_FALSE(new_status > IN_PROGRESS && new_status < REJECTED, ESP_ERR_INVALID_ARG, cleanup,
                     TAG, "Invalid new_status value");
   ESP_GOTO_ON_FALSE(payload != NULL, ESP_ERR_NO_MEM, cleanup, TAG, "Couldn't allocate cJSON root");
 
@@ -624,7 +625,8 @@ esp_err_t jobs_data_handler(const char *thing_name, const char *data, int data_l
            job_class == OTA_UPDATE ? "n OTA_UPDATE"
                                    : (job_class == VIDEO_UPLOAD ? " VIDEO_UPLOAD" : "n INVALID"));
 
-  if (job_class == OTA_UPDATE) {
+  switch (job_class) {
+  case OTA_UPDATE:
     // Search for the Job Document
     char *job_document = strstr(data, "jobDocument");
     /// TODO: Use the clientToken for this
@@ -635,9 +637,13 @@ esp_err_t jobs_data_handler(const char *thing_name, const char *data, int data_l
       char *pending_jobs = strstr(data, "inProgressJobs");
       char *job_id       = strstr(data, "jobId");
       /// TODO: Check if job_id is NULL
-      job_id             += strlen("\"jobID\":");
-      size_t job_id_len   = strstr(job_id, "\"") - job_id;
-      job_id[job_id_len]  = '\0';
+      job_id += strlen("\"jobID\":");
+      if (!job_id) {
+        ESP_LOGW(TAG, "No Job ID found in payload");
+        break;
+      }
+      size_t job_id_len  = strstr(job_id, "\"") - job_id;
+      job_id[job_id_len] = '\0';
       if (pending_jobs && !strcmp(job_id, ota_stream.job_id)) {
         ESP_LOGW(TAG, "This OTA Job is already in progress");
         if (s_download_task_h != NULL && eTaskGetState(s_download_task_h) != eDeleted) {
@@ -687,7 +693,13 @@ esp_err_t jobs_data_handler(const char *thing_name, const char *data, int data_l
       esp_event_post_to(OTA_event_h, OTA_EVENTS, OTA_JOB_RECEIVED, &ota_stream,
                         sizeof(ota_stream_t), 100);
     }  // end if (job_document == NULL)
-  }  // end if(job_class == OTA_UPDATE)
+    break;
+  case INVALID:
+    ESP_LOGD(TAG, "Payload: %.*s", data_len, data);
+    break;
+  default:
+    break;
+  }  // end switch
 
   return ret;
 }  // end jobs_data_handler
