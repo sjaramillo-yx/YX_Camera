@@ -163,7 +163,8 @@ cleanup:
   return ret;
 }  // end file_get_stream
 
-static esp_err_t jobs_update_job_status(char *job_id, job_status_t new_status, char *client_token) {
+static esp_err_t jobs_update_job_status(char *job_id, job_status_t new_status, char *client_token,
+                                        char *thing_name) {
   esp_err_t ret         = ESP_OK;
   cJSON    *payload     = cJSON_CreateObject();
   char     *payload_str = NULL;
@@ -171,10 +172,10 @@ static esp_err_t jobs_update_job_status(char *job_id, job_status_t new_status, c
 
   ESP_GOTO_ON_FALSE(job_id != NULL && job_id[0] != '\0', ESP_ERR_INVALID_ARG, cleanup, TAG,
                     "Job ID can't be NULL!");
-  ESP_GOTO_ON_FALSE(ota_stream.thing_name != NULL && ota_stream.thing_name[0] != '\0',
-                    ESP_ERR_INVALID_ARG, cleanup, TAG, "Thing name can't be NULL!");
-  ESP_GOTO_ON_FALSE(new_status > IN_PROGRESS && new_status < REJECTED, ESP_ERR_INVALID_ARG, cleanup,
-                    TAG, "Invalid new_status value");
+  ESP_GOTO_ON_FALSE(thing_name != NULL && thing_name[0] != '\0', ESP_ERR_INVALID_ARG, cleanup, TAG,
+                    "Thing name can't be NULL!");
+  ESP_GOTO_ON_FALSE(new_status >= IN_PROGRESS && new_status <= REJECTED, ESP_ERR_INVALID_ARG,
+                    cleanup, TAG, "Invalid new_status value 0x%02x", new_status);
   ESP_GOTO_ON_FALSE(payload != NULL, ESP_ERR_NO_MEM, cleanup, TAG, "Couldn't allocate cJSON root");
 
   client_token = client_token ? client_token : "";
@@ -267,13 +268,14 @@ static esp_err_t file_process_ota_data(char *buf, int buflen) {
   data_block.file_index = cJSON_GetObjectItem(ota_data, "f")->valueint;
   data_block.index      = cJSON_GetObjectItem(ota_data, "i")->valueint;
   int payload_len       = cJSON_GetObjectItem(ota_data, "l")->valueint;
-  payload_len           = (payload_len * 4 + 3 - 1) / 3;
+  int b64_len           = strlen(cJSON_GetStringValue(cJSON_GetObjectItem(ota_data, "p")));
 
   ESP_GOTO_ON_ERROR(
       mbedtls_base64_decode(data_block.data, CONFIG_DATA_BLOCK_SIZE, &(data_block.len),
                             (const unsigned char *)cJSON_GetObjectItem(ota_data, "p")->valuestring,
-                            payload_len + payload_len % 4),
-      cleanup, TAG, "Couldn't decode data block");
+                            b64_len),
+      cleanup, TAG, "Couldn't decode data block. Payload is:\n%.*s", b64_len,
+      cJSON_GetObjectItem(ota_data, "p")->valuestring);
 
   ESP_LOGV(TAG, "sending data block with buffer at %p to queue at %p", data_block.data,
            s_filled_stream_data_q);
@@ -391,16 +393,19 @@ static void ota_event_handler(void *handler_arg, esp_event_base_t event_base, in
   switch (event_id) {
   case OTA_JOB_REJECTED:
     ESP_LOGW(TAG, "OTA Update rejected by OTA Manager, aborting");
-    jobs_update_job_status(ota_stream.job_id, REJECTED, "updateJob");
+    jobs_update_job_status(ota_stream.job_id, REJECTED, "updateJob", ota_stream.thing_name);
     /// TODO: Mark the AWS Job as failed and include reason.
     break;
   case OTA_CTRL_START:
     file_describe_stream(mqtt_client, ota_stream.thing_name, "describeStream",
                          ota_stream.stream_id);
     break;
-  case OTA_CTRL_DONE:
-    jobs_update_job_status(ota_stream.job_id, SUCCEEDED, "updateJob");
-    /// TODO: Update Job status in AWS and end ota task
+  case OTA_JOB_DONE:
+  case OTA_JOB_ERROR:
+    /// OTA partition has been written and tested.
+    ota_result_t *ota_res = (ota_result_t *)event_data;
+    jobs_update_job_status(ota_res->job_id, (ota_res->err_code == ESP_OK) ? SUCCEEDED : FAILED,
+                           "updateJob", ota_res->thing_name);
     break;
   default:
     break;
@@ -428,7 +433,7 @@ void download_task(void *arg) {
                     TAG, "Failed subscribing to stream description rejected topic");
 
   // Update the Job status
-  jobs_update_job_status(ota_stream.job_id, IN_PROGRESS, "updateJob");
+  jobs_update_job_status(ota_stream.job_id, IN_PROGRESS, "updateJob", ota_stream.thing_name);
 
   // Initialize the hashing context
   ESP_LOGD(TAG, "Initializing SHA256 hashing context...");
@@ -513,8 +518,11 @@ void download_task(void *arg) {
       // Flip the bit for this block
       get_conf.block_bitmap ^= 1u << (data_block.index % CONFIG_DATA_BLOCK_COUNT);
       // Check for last block received
-      if (data_block.index + 1 >= block_n)
+      if (data_block.index + 1 >= block_n) {
         curr_chunk.last = true;
+        // Last chunk must include the Job ID.
+        strlcpy(curr_chunk.job_id, ota_stream.job_id, sizeof(curr_chunk.job_id));
+      }
     }  // end for
     // Send the chunk back to the OTA Manager
     ESP_LOGV(TAG, "Sending chunk %d to the OTA Manager", i);
@@ -620,7 +628,8 @@ esp_err_t jobs_data_handler(const char *thing_name, const char *data, int data_l
   char      topic_name[256];
 
   job_class_t job_class = jobs_get_job_class(data);
-  ESP_LOGD(TAG, "This Job is a%s job",
+  /// NOTE: VIDEO_UPLOAD jobs are not currently supported. Video upload is done via the s3_uploader.
+  ESP_LOGV(TAG, "This Job is a%s job",
            job_class == OTA_UPDATE ? "n OTA_UPDATE"
                                    : (job_class == VIDEO_UPLOAD ? " VIDEO_UPLOAD" : "n INVALID"));
 

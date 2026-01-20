@@ -37,7 +37,7 @@ esp_err_t jobs_get_pending(char *thing_name, char *client_token);
  * @brief Get a specific job's execution status. The response always includes the job document
  * @todo Make the job document optional.
  *
- * @param client_token A pointer to a null-terminated string to use as a client token. This string
+ * @param client_token A null-terminated string to use as a client token. This string
  * is arbitrary and can be used to correlate requests and responses.
  * @param thing_name The name of the Thing to query job status
  * @param job_id The ID of the job to be queried

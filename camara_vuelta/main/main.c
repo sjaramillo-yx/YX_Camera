@@ -31,6 +31,7 @@ static esp_err_t mqtt_w_inited;
 static esp_err_t sd_mounted;
 static esp_err_t vman_inited;
 static esp_err_t hello_published;
+static esp_err_t ota_rec_retrieved;
 // Event loops
 static esp_event_loop_handle_t OTA_event_h;
 
@@ -98,6 +99,8 @@ void app_main(void) {
 
   // Initialize NVS manager
   nvsman_begin();
+  ota_record_t *ota_rec = (ota_record_t *)calloc(1, sizeof(ota_record_t));
+  ESP_ERROR_CHECK_WITHOUT_ABORT(ota_rec_retrieved = nvsman_get_ota_record(ota_rec));
 
   const esp_partition_t *running  = esp_ota_get_running_partition();
   const esp_partition_t *boot     = esp_ota_get_boot_partition();
@@ -114,18 +117,16 @@ void app_main(void) {
     ESP_LOGW(TAG, "[APP] A partition is in failure state");
     ESP_LOGW(TAG, "[APP] Failed partition label: %s", last_bad->label);
     ESP_LOGW(TAG, "[APP] Failed partition offset: 0x%08x", last_bad->address);
-    /// TODO: Print failure message
-    ota_fail_record_t *fail_rec = (ota_fail_record_t *)calloc(sizeof(ota_fail_record_t), 1);
-    esp_err_t          ret      = nvsman_get_ota_fail(fail_rec);
-    if (ret != ESP_OK) {
-      ESP_LOGE(TAG, "Couldn't retrieve OTA failure record");
+    if (ota_rec_retrieved != ESP_OK) {
+      ESP_LOGE(TAG, "Couldn't retrieve OTA record");
     } else {
       ESP_LOGW(TAG, "[APP] Failed partition error code: %s",
-               esp_err_to_name((esp_err_t)fail_rec->esp_err));
-      ESP_LOGW(TAG, "[APP] Failed partition error message: %s", fail_rec->detail);
+               esp_err_to_name((esp_err_t)ota_rec->esp_err));
+      ESP_LOGW(TAG, "[APP] Failed partition error message: %s", ota_rec->detail);
     }
   }
 
+  // Create the event loops
   rec_eventloop_create();
   OTA_eventloop_create();
   ESP_LOGI(TAG, "Event loops created");
@@ -166,6 +167,20 @@ void app_main(void) {
   vman_getJSON(&vmanJSON);
   // Publish initial state
   hello_published = mqttworker_publish_initial_state(sdJSON, vmanJSON);  // Also frees cJSON memory
+
+  // If OTA partition is in failure state, tell the MQTT manager to update the Job
+  if (last_bad != NULL) {
+    /// TODO: Post an event including the neccesary details in the event data pointer
+    ota_result_t ota_res = {.err_code = ota_rec->esp_err};
+    strlcpy(ota_res.job_id, ota_rec->job_id, sizeof(ota_res.job_id));
+    strlcpy(ota_res.detail, ota_rec->detail, sizeof(ota_res.detail));
+    mqttworker_get_thingname(ota_res.thing_name);
+    /// TODO: Remove portMAX_DELAY and fail accordingly
+    esp_event_post_to(OTA_event_h, OTA_EVENTS, OTA_JOB_ERROR, &ota_res, sizeof(ota_result_t),
+                      portMAX_DELAY);
+    /// TODO: If no connection is available, retry on connected
+    /// TODO: Clear the OTA record after this.
+  }
 
   while (true) {
     vTaskDelay(pdMS_TO_TICKS(30000));

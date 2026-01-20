@@ -19,6 +19,9 @@
 #include <esp_system.h>
 /* Standard includes*/
 /* FreeRTOS includes*/
+#include <freertos/FreeRTOS.h>
+#include <freertos/queue.h>
+#include <freertos/task.h>
 /* Custom includes */
 #include "NVS_manager.h"
 
@@ -46,8 +49,10 @@ typedef enum {
  * @param test_function A function pointer to the component test to run. This function must receive
  * a char pointer as it's only parameter (where the error message must be written to) and return an
  * `esp_err_t` type value.
+ * @param out_ota_rec A pointer to an `ota_record_t` structure already populated with the last OTA
+ * flow result information.
  */
-esp_err_t otaman_run_test(component_test test_function);
+esp_err_t otaman_run_test(component_test test_function, ota_record_t *in_ota_rec);
 
 /**
  * @brief Check if OTA Manager can start a new OTA update process.
@@ -64,7 +69,7 @@ esp_err_t otaman_start_update(uint32_t image_size);
 /**
  * @brief Initalize the OTA Manager
  */
-esp_err_t otaman_init();
+esp_err_t otaman_init(QueueHandle_t *free_chunk_queue, QueueHandle_t *filled_chunk_queue);
 
 #ifdef __cplusplus
 }

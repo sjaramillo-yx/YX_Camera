@@ -87,13 +87,20 @@ static void ota_task(void *arg) {
                       "Couldn't write chunk to OTA partition");
     if (curr_chunk.last) {
       ESP_LOGI(TAG, "Received last chunk, closing");
-      /// TODO: Turn all this into a static function
       /// TODO: Drain free queue
       // End the OTA flow
       esp_ota_end(s_ota_handle);
       // Update boot partition
       ESP_LOGI(TAG, "Setting updated partition as boot");
       esp_ota_set_boot_partition(ota_partition);
+      // Make an OTA record of this flow
+      ota_record_t *ota_rec = (ota_record_t *)calloc(1, sizeof(ota_record_t));
+      ota_rec->magic        = CONFIG_OTA_REC_MAGIC;
+      ota_rec->esp_err      = ESP_OK;
+      strlcpy(ota_rec->detail, "Writer done.", sizeof(ota_rec->detail));
+      strlcpy(ota_rec->job_id, curr_chunk.job_id, sizeof(ota_rec->job_id));
+      nvsman_save_ota_record(ota_rec);
+
       /// TODO: Check for errors and move to OTA_MAN_ERROR state.
       otaman_state = OTA_MAN_DONE;
       esp_event_post_to(OTA_event_h, OTA_EVENTS, OTA_CTRL_DONE, NULL, 0, portMAX_DELAY);
@@ -108,22 +115,26 @@ end:
 }
 
 /*================== Public Functions ==================*/
-esp_err_t otaman_run_test(component_test test_function) {
-  esp_err_t          ret      = ESP_OK;
-  ota_fail_record_t *fail_rec = (ota_fail_record_t *)calloc(sizeof(ota_fail_record_t), 1);
+esp_err_t otaman_run_test(component_test test_function, ota_record_t *in_ota_rec) {
+  esp_err_t ret = ESP_OK;
+  ESP_RETURN_ON_FALSE(in_ota_rec != NULL, ESP_ERR_INVALID_ARG, TAG, "OTA record can't be NULL!");
+
+  if (in_ota_rec->magic != CONFIG_OTA_REC_MAGIC) {
+    ESP_LOGE(TAG, "OTA record is invalid, magic bytes are scrambled.");
+    memset(in_ota_rec, 0, sizeof(ota_record_t));
+  }
   // Run the test
-  ret = test_function(fail_rec->detail);
+  ret = test_function(in_ota_rec->detail);
   if (ret == ESP_OK) {
-    free(fail_rec);
     return ESP_OK;
   }
   // Something failed
   ESP_LOGE(TAG, "Component test failed with code %s", esp_err_to_name(ret));
-  // Populate the failure record
-  fail_rec->esp_err = (int32_t)ret;
-  fail_rec->magic   = 0x4F544146;  // "OTAF" in hex format
-  ESP_RETURN_ON_ERROR(nvsman_save_ota_fail(fail_rec), TAG,
-                      "Couldn't save OTA failure record to NVS");
+  // Populate the failure memebers of the record
+  in_ota_rec->esp_err = (int32_t)ret;
+  in_ota_rec->magic   = CONFIG_OTA_REC_MAGIC;  // "OTAR" in hex format
+  ESP_LOGI(TAG, "Saving OTA record with job ID %s.", in_ota_rec->job_id);
+  ESP_RETURN_ON_ERROR(nvsman_save_ota_record(in_ota_rec), TAG, "Couldn't save OTA record to NVS");
   // Mark app as invalid and rollback
   ret = esp_ota_mark_app_invalid_rollback_and_reboot();
   if (ret != ESP_OK) {

@@ -105,63 +105,66 @@ esp_err_t nvsman_get_certs(cert_data_t *out_certs) {
   return ESP_OK;
 }
 
-esp_err_t nvsman_save_ota_fail(ota_fail_record_t *new_fail_rec) {
-  // Open the namespace "ota_fails"
-  nvs_handle_t fails_handle;
-  esp_err_t    err = nvs_open("ota_fails", NVS_READWRITE, &fails_handle);
+esp_err_t nvsman_save_ota_record(ota_record_t *new_ota_rec) {
+  // Open the namespace "ota_rec"
+  nvs_handle_t ota_rec_handle;
+  esp_err_t    err = nvs_open("ota_rec", NVS_READWRITE, &ota_rec_handle);
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "Failed opening NVS namespace (0x%02x)", err);
     return err;
   }
 
-  ESP_LOGI(TAG, "Saving new OTA fail record");
-  size_t fail_rec_size = sizeof(ota_fail_record_t);
-  err                  = nvs_set_blob(fails_handle, "ota_fails", new_fail_rec, fail_rec_size);
+  ESP_LOGI(TAG, "Saving new OTA record");
+  size_t ota_rec_size = sizeof(ota_record_t);
+  err                 = nvs_set_blob(ota_rec_handle, "ota_rec", new_ota_rec, ota_rec_size);
   if (err != ESP_OK) {
-    ESP_LOGE(TAG, "Failed to write OTA fail record blob!");
-    nvs_close(fails_handle);
+    ESP_LOGE(TAG, "Failed to write OTA record blob!");
+    nvs_close(ota_rec_handle);
     return err;
   }
   // Commit
-  err = nvs_commit(fails_handle);
+  err = nvs_commit(ota_rec_handle);
   if (err != ESP_OK) {
     ESP_LOGE(TAG, "Failed to commit data");
   }
 
-  nvs_close(fails_handle);
+  nvs_close(ota_rec_handle);
   return err;
 }
 
-esp_err_t nvsman_get_ota_fail(ota_fail_record_t *out_fail_rec) {  // Open the namespace "certs"
-  nvs_handle_t fails_handle;
-  esp_err_t    err = nvs_open("ota_fails", NVS_READONLY, &fails_handle);
+esp_err_t nvsman_get_ota_record(ota_record_t *out_ota_rec) {
+  nvs_handle_t ota_rec_handle;
+  esp_err_t    err = nvs_open("ota_rec", NVS_READONLY, &ota_rec_handle);
   if (err != ESP_OK) {
     if (err == ESP_ERR_NVS_NOT_FOUND) {
-      ESP_LOGW(TAG, "OTA fail record not found in NVS!");
+      ESP_LOGW(TAG, "OTA record not found in NVS!");
     } else {
       ESP_LOGE(TAG, "Failed opening NVS namespace: %s (0x%02x)", esp_err_to_name(err), err);
     }
     return err;
   }
 
-  ESP_LOGD(TAG, "Searching for stored OTA fail record");
-  size_t fail_rec_size = sizeof(ota_fail_record_t);
-  err                  = nvs_get_blob(fails_handle, "ota_fails", out_fail_rec, &fail_rec_size);
+  ESP_LOGD(TAG, "Searching for stored OTA record");
+  size_t ota_rec_size = sizeof(ota_record_t);
+  err                 = nvs_get_blob(ota_rec_handle, "ota_rec", out_ota_rec, &ota_rec_size);
   if (err != ESP_OK) {
     if (err == ESP_ERR_NVS_NOT_FOUND) {
-      ESP_LOGW(TAG, "OTA fail record not found in NVS!");
+      ESP_LOGW(TAG, "OTA record not found in NVS!");
     } else {
       ESP_LOGE(TAG, "Error 0x%02x", err);
     }
-  }
-  // Check magic ("OTAF" in hex format)
-  if (out_fail_rec->magic != 0x4F544146) {
-    err = ESP_ERR_NVS_NOT_FOUND;
-    memset(out_fail_rec, 0, sizeof(ota_fail_record_t));
-    ESP_LOGE(TAG, "Failure record is invalid, magic bytes are scrambled");
-    /// TODO: Maybe clear this blob
+    goto cleanup;
+  } else {
+    // Check magic ("OTAF" in hex format)
+    if (out_ota_rec->magic != CONFIG_OTA_REC_MAGIC) {
+      err = ESP_ERR_NVS_NOT_FOUND;
+      memset(out_ota_rec, 0, sizeof(ota_record_t));
+      ESP_LOGE(TAG, "Record is invalid, magic bytes are scrambled");
+      /// TODO: Maybe clear this blob
+    }
   }
 
-  nvs_close(fails_handle);
+cleanup:
+  nvs_close(ota_rec_handle);
   return err;
 }

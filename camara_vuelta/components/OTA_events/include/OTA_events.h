@@ -45,11 +45,22 @@ typedef struct ota_stream_t {
  * @brief A data structure for OTA chunks
  */
 typedef struct ota_chunk_t {
-  int      index;
-  size_t   len;
-  uint8_t *data;  // Pointer to a chunk buffer
-  bool     last;
+  int      index;        // Index of this chunk.
+  size_t   len;          // Length of the data inside the buffer.
+  uint8_t *data;         // Pointer to a chunk buffer.
+  bool     last;         // Wether this is the last chunk to write.
+  char     job_id[128];  // The last chunk will include the Job ID.
 } ota_chunk_t;
+
+/**
+ * @brief A data structure to send OTA flow results
+ */
+typedef struct ota_result_t {
+  esp_err_t err_code;        // Last error code.
+  char      detail[128];     // Short status message.
+  char      job_id[128];     // The job ID for the corresponding AWS OTA Job.
+  char      thing_name[128]  // This device's ThingName.
+} ota_result_t;
 
 /**
  * @brief All the possible OTA events
@@ -63,7 +74,7 @@ typedef enum {
   OTA_CTRL_CANCEL,
   OTA_CTRL_DONE,  // OTA Manager has finished applying the OTA update.
   OTA_JOB_DONE,   // OTA partition has been validated, job finished.
-  OTA_JOB_ERROR,
+  OTA_JOB_ERROR,  // Job failed
 } OTA_event_t;
 
 /**

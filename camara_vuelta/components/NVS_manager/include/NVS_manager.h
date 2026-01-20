@@ -23,19 +23,20 @@ typedef struct {
   char client_crt[4096];
   char client_key[4096];
   char cert_id[512];
-  char thing_name[512];
+  char thing_name[128];
   bool populated;
 } cert_data_t;
 
 /**
- * @brief A data structure to store OTA fail records in a blob.
+ * @brief A data structure to store OTA records in a blob.
  */
 /// TODO: Turn the contents of magic into a Kconfig option
-typedef struct {
-  uint32_t magic;        // helps verify integrity of the blob
-  int32_t  esp_err;      // last error code (esp_err_t fixed to 32 bits)
-  char     detail[128];  // short message (truncate)
-} ota_fail_record_t;
+typedef struct ota_record_t {
+  uint32_t magic;        // Helps verify integrity of the blob.
+  int32_t  esp_err;      // Last error code (esp_err_t fixed to 32 bits).
+  char     detail[128];  // Short message (truncate).
+  char     job_id[128];  // The job ID for the corresponding AWS OTA Job.
+} ota_record_t;
 
 /**
  * @brief Initialize the NVS partition
@@ -53,11 +54,11 @@ esp_err_t nvsman_save_certs(cert_data_t *new_certs);
 esp_err_t nvsman_get_certs(cert_data_t *out_certs);
 
 /**
- * @brief Save an OTA fail record to the NVS partition
+ * @brief Save an OTA record to the NVS partition
  */
-esp_err_t nvsman_save_ota_fail(ota_fail_record_t *new_fail_rec);
+esp_err_t nvsman_save_ota_record(ota_record_t *new_ota_rec);
 
 /**
- * @brief Get the last saved OTA failure record
+ * @brief Get the last saved OTA record
  */
-esp_err_t nvsman_get_ota_fail(ota_fail_record_t *out_fail_rec);
+esp_err_t nvsman_get_ota_record(ota_record_t *out_ota_rec);
