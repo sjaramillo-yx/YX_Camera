@@ -99,7 +99,7 @@ static char topic_status_active[CONFIG_S3_MAX_TOPIC_LEN];
 static start_msg_t start_message_temp;
 
 // Current upload
-static upload_ctx_t current_upload;
+static upload_ctx_t current_upload          = {0};
 static uint32_t     last_ready_for_parts_ms = 0;
 static uint8_t      ready_for_parts_count   = 0;
 
@@ -646,7 +646,9 @@ esp_err_t s3_uploader_on_connected(void) {
                       "Subscribe failed start");
 
   // If a session is active during reconnect, resubscribe to its commands topic
-  subscribe_commands_topic();
+  if (current_upload.recording_id[0] != '\0') {
+    subscribe_commands_topic();
+  }
   return ESP_OK;
 }
 
