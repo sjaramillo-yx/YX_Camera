@@ -242,15 +242,15 @@ esp_err_t sdman_stat_file(char *filename, size_t *file_size) {
 }
 
 esp_err_t sdman_getJSON(cJSON **sdJSON) {
-  esp_err_t ret = ESP_FAIL;
-  /// TODO: Cleanup in case of error
-  *sdJSON = cJSON_CreateObject();
-  if (*sdJSON == NULL)
-    goto end;
+  esp_err_t ret     = ESP_FAIL;
+  cJSON    *size_mb = NULL;
+  cJSON    *present = NULL;
+  cJSON    *free_mb = NULL;
 
-  cJSON *present = cJSON_CreateBool(card != NULL && sd_initialized);
-  if (present == NULL)
-    goto end;
+  ESP_GOTO_ON_FALSE((*sdJSON = cJSON_CreateObject()) != NULL, ESP_ERR_NO_MEM, cleanup, TAG,
+                    "No memory for SD card cJSON object");
+  ESP_GOTO_ON_FALSE((present = cJSON_CreateBool(card != NULL && sd_initialized)) != NULL,
+                    ESP_ERR_NO_MEM, cleanup, TAG, "No memory for SD card presence");
   cJSON_AddItemToObject(*sdJSON, "present", present);
   if (cJSON_IsFalse(present)) {
     return ESP_OK;
@@ -258,18 +258,17 @@ esp_err_t sdman_getJSON(cJSON **sdJSON) {
   uint64_t sd_total_size;
   uint64_t sd_free_size;
   esp_vfs_fat_info(mount_point, &sd_total_size, &sd_free_size);
-  cJSON *size_mb = cJSON_CreateNumber(sd_total_size >> 20);
-  if (size_mb == NULL)
-    goto end;
-  cJSON *free_mb = cJSON_CreateNumber(sd_free_size >> 20);
-  if (free_mb == NULL)
-    goto end;
+  ESP_GOTO_ON_FALSE((size_mb = cJSON_CreateNumber(sd_total_size >> 20)) != NULL, ESP_ERR_NO_MEM,
+                    cleanup, TAG, "No memory for SD card size");
+  ESP_GOTO_ON_FALSE((free_mb = cJSON_CreateNumber(sd_free_size >> 20)) != NULL, ESP_ERR_NO_MEM,
+                    cleanup, TAG, "No memory for SD free space");
   cJSON_AddItemToObject(*sdJSON, "sizeMB", size_mb);
   cJSON_AddItemToObject(*sdJSON, "freeMB", free_mb);
 
   return ESP_OK;
 
-end:
-  /// TODO: Cleanup
+cleanup:
+  if (*sdJSON)
+    cJSON_Delete(*sdJSON);
   return ret;
 }
