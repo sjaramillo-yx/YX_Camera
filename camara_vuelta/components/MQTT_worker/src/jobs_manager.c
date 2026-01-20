@@ -472,7 +472,6 @@ void download_task(void *arg) {
     get_conf.block_bitmap = -1;
     ESP_LOGD(TAG, "Getting blocks %d-%d", CONFIG_DATA_BLOCK_COUNT * i,
              CONFIG_DATA_BLOCK_COUNT * i + (CONFIG_DATA_BLOCK_COUNT - 1));
-    ESP_LOGD(TAG, "ThingName: %s, StreamID: %s", ota_stream.thing_name, ota_stream.stream_id);
     ESP_GOTO_ON_ERROR(file_get_stream(ota_stream.thing_name, "getOtaStreamTest", get_conf), cleanup,
                       TAG, "Couldn't publish get stream request");
     // Set the bitmap to all "1s" to track received blocks
@@ -518,7 +517,7 @@ void download_task(void *arg) {
         curr_chunk.last = true;
     }  // end for
     // Send the chunk back to the OTA Manager
-    ESP_LOGD(TAG, "Sending chunk %d to the OTA Manager", i);
+    ESP_LOGV(TAG, "Sending chunk %d to the OTA Manager", i);
     xQueueSendToBack(s_filled_chunk_q, &curr_chunk, portMAX_DELAY);
     // Get next OTA chunk
     memset(&curr_chunk, 0, sizeof(ota_chunk_t));
@@ -675,7 +674,6 @@ esp_err_t jobs_data_handler(const char *thing_name, const char *data, int data_l
       ESP_LOGV(TAG, "Event data starts at %p and contains %d bytes", data, data_len);
       ESP_LOGV(TAG, "Job document starts at %p and contains %d bytes", job_document,
                job_document_size);
-      ESP_LOGD(TAG, "Job document: %.*s", 20, job_document);
       ESP_RETURN_ON_ERROR(jobs_parse_ota_job(job_document, job_document_size, &ota_stream), TAG,
                           "Couldn't parse OTA job");
       ESP_LOGD(TAG, "JobDocument parsed. StreamID is %s", ota_stream.stream_id);
@@ -710,7 +708,6 @@ esp_err_t jobs_stream_data_handler(const char *thing_name, const char *data, int
   /// TODO: Make clientTokens KConfig options
   if (strstr(data, "describeStream")) {
     // If the "describeStream" clientToken was found
-    ESP_LOGD(TAG, "%.*s", data_len, data);
     ESP_LOGD(TAG, "This is a Stream description message, parsing");
     ESP_RETURN_ON_ERROR(file_parse_stream_description(data, data_len, &ota_stream), TAG,
                         "Couldn't parse stream description");
