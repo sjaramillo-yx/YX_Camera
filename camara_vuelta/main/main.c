@@ -173,9 +173,10 @@ void app_main(void) {
     mqttworker_publish_current_state(sdJSON, vman_is_recording());  // This also frees cJSON memory
     if (vman_is_recording()) {
       publish_rec_state();
-    }
-  }
-}
+    }  // end if
+    mqttworker_check_for_jobs();
+  }  // end while
+}  // end app_main
 
 #ifdef __cplusplus
 }

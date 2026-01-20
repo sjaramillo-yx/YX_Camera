@@ -91,9 +91,6 @@ static void mqtt_connected_handler(void *handler_args, esp_event_base_t base, in
   snprintf(topic_name, 1024, "$aws/things/%s/jobs/notify-next", mqtt_cert_data.thing_name);
   ESP_LOGD(TAG, "Subscribing to topic: %s", topic_name);
   esp_mqtt_client_subscribe(client, topic_name, 0);
-  // Ask for pending jobs
-  ESP_LOGI(TAG, "Getting pending jobs for %s", mqtt_cert_data.thing_name);
-  jobs_get_pending(mqtt_cert_data.thing_name, "justConnected");
   // Connect the S3 uploader
   s3_uploader_on_connected();
   // Give the connected semaphore
@@ -482,4 +479,17 @@ esp_err_t mqttworker_publish_recording_state(cJSON *recJSON) {
     cJSON_Delete(recJSON);
   return ret;
   /// TODO: Handle errors
+}
+
+esp_err_t mqttworker_get_thingname(char thing_name[128]) {
+  ESP_RETURN_ON_FALSE(mqtt_cert_data.populated, ESP_ERR_INVALID_STATE, TAG,
+                      "MQTT Cert data has not been populated, can't retrieve ThingName");
+  strlcpy(thing_name, mqtt_cert_data.thing_name, sizeof(thing_name));
+  return ESP_OK;
+}
+
+esp_err_t mqttworker_check_for_jobs() {
+  // Ask for pending jobs
+  ESP_LOGD(TAG, "Getting pending jobs for %s", mqtt_cert_data.thing_name);
+  return jobs_get_pending(mqtt_cert_data.thing_name, "getJobs");
 }

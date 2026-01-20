@@ -59,3 +59,15 @@ esp_err_t mqttworker_publish_recording_state(cJSON *recJSON);
  * @brief Verify the certificates embedded into the binary image can be parsed.
  */
 esp_err_t mqttworker_verify_flash_certs(void);
+
+/**
+ * @brief Get the ThingName associated to this device
+ *
+ * @param[out] out_buff The buffer where the ThingName string will be written to.
+ */
+esp_err_t mqttworker_get_thingname(char thing_name[128]);
+
+/**
+ * @brief Check for pending jobs.
+ */
+esp_err_t mqttworker_check_for_jobs();
