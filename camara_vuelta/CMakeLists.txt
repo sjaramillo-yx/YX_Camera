@@ -20,4 +20,4 @@ set(AWS_IOT_ROOT_CA   "${CONFIG_AWS_IOT_ROOT_CA_PATH}")
 set(GEN_CSV "${CMAKE_BINARY_DIR}/certificates.csv")
 configure_file("${CMAKE_SOURCE_DIR}/certificates.csv" "${GEN_CSV}" @ONLY)
 
-nvs_create_partition_image(certs "${GEN_CSV}" FLASH_IN_PROJECT)
+nvs_create_partition_image(certs "${GEN_CSV}")
