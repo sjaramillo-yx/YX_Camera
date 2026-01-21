@@ -1,6 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Determine available Python interpreter (python3 preferred)
+PYTHON_BIN=""
+if command -v python3 >/dev/null 2>&1; then
+  PYTHON_BIN="python3"
+elif command -v python >/dev/null 2>&1; then
+  PYTHON_BIN="python"
+else
+  echo "ERROR: Neither python3 nor python is available in PATH. Install Python to continue." >&2
+  exit 1
+fi
+
+
+
 usage() {
   cat <<'EOF'
 Usage:
@@ -115,7 +128,7 @@ log() { echo "==> $*" >&2; }
 
 generate_temp_password() {
   # Generates a strong temp password that includes upper/lower/digit/symbol.
-  python - <<'PY'
+  ${PYTHON_BIN} - <<'PY'
 import secrets, string
 upper = string.ascii_uppercase
 lower = string.ascii_lowercase
@@ -190,8 +203,7 @@ render_json() {
     -e "s|\${ENV}|${env_name}|g" \
     -e "s|\${ENV_GROUP}|${ENV_GROUP}|g" \
     "${in_file}" > "${out_file}"
-
-  python -m json.tool "${out_file}" >/dev/null
+  ${PYTHON_BIN} -m json.tool "${out_file}" >/dev/null
 }
 
 policy_arn_by_name() {
