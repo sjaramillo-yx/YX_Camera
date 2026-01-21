@@ -21,6 +21,11 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 /* Custom includes */
+#include "NVS_manager.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /**
  * @brief A simple structure to pair an MQTT client and configuration
@@ -47,6 +52,11 @@ typedef enum {
 /**
  * @brief Provision the device by claim
  *
- * @param client
+ * @param client The MQTT Client used to connect to AWS.
+ * @param cert_data A pointer to a `cert_data_t` structure to be populated and then written to NVS.
  */
-esp_err_t provision_begin(esp_mqtt_client_handle_t client);
+esp_err_t provision_begin(esp_mqtt_client_handle_t client, cert_data_t *cert_data);
+
+#ifdef __cplusplus
+}
+#endif

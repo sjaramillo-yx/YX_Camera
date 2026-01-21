@@ -5,6 +5,7 @@
  *
  * @brief This header manages Non-Volatile Storage.
  */
+#pragma once
 
 /* Espressif includes */
 #include <esp_check.h>
@@ -16,12 +17,17 @@
 /* FreeRTOS includes*/
 /* Custom includes */
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /**
  * @brief A data structure to store certificate data in a blob.
  */
-typedef struct {
+typedef struct cert_data_t {
   char client_crt[4096];
   char client_key[4096];
+  char root_ca[4096];
   char cert_id[512];
   char thing_name[128];
   bool populated;
@@ -62,3 +68,7 @@ esp_err_t nvsman_save_ota_record(ota_record_t *new_ota_rec);
  * @brief Get the last saved OTA record
  */
 esp_err_t nvsman_get_ota_record(ota_record_t *out_ota_rec);
+
+#ifdef __cplusplus
+}
+#endif

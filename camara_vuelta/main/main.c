@@ -77,6 +77,7 @@ static void ota_event_handler(void *handler_arg, esp_event_base_t event_base, in
 }
 
 void app_main(void) {
+  esp_err_t err = ESP_OK;
   // Set log levels
   esp_log_level_set("*", ESP_LOG_INFO);
   esp_log_level_set("mqtt_client", ESP_LOG_INFO);
@@ -100,7 +101,7 @@ void app_main(void) {
   // Initialize NVS manager
   nvsman_begin();
   ota_record_t *ota_rec = (ota_record_t *)calloc(1, sizeof(ota_record_t));
-  ESP_ERROR_CHECK_WITHOUT_ABORT(ota_rec_retrieved = nvsman_get_ota_record(ota_rec));
+  ota_rec_retrieved     = nvsman_get_ota_record(ota_rec);
 
   const esp_partition_t *running  = esp_ota_get_running_partition();
   const esp_partition_t *boot     = esp_ota_get_boot_partition();
@@ -154,9 +155,10 @@ void app_main(void) {
   // Connect to AWS
   if (ethman_wait_ip(1000) == ESP_OK)
     ethman_wait_sntp(10000);
-  if (mqtt_w_inited == ESP_OK)
-    mqttworker_begin(1000);
-  else
+  if (mqtt_w_inited == ESP_OK) {
+    if ((err = mqttworker_begin(10000)) != ESP_OK)
+      ESP_LOGE(TAG, "MQTT Worker couldn't begin: %s (0x%02x)", esp_err_to_name(err), err);
+  } else
     ESP_LOGW(TAG, "The MQTT worker couldn't be initialized. No connection will be attempted");
 
   // Get information about the SD Card
