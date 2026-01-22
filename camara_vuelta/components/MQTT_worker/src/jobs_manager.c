@@ -196,9 +196,9 @@ static esp_err_t jobs_update_job_status(char *job_id, job_status_t new_status, c
 
   ESP_GOTO_ON_FALSE(NULL != (payload_str = cJSON_Print(payload)), ESP_FAIL, cleanup, TAG,
                     "Couldn't print the payload to payload_str");
-  sprintf(topic_name, "$aws/things/%s/jobs/%s/update", ota_stream.thing_name, job_id);
-  ESP_LOGW(TAG, "DEBUG: publishing to %s", topic_name);
-  ESP_LOGW(TAG, "%s", payload_str);
+  sprintf(topic_name, "$aws/things/%s/jobs/%s/update", thing_name, job_id);
+  ESP_LOGD(TAG, "Publishing status update to %s", topic_name);
+  ESP_LOGV(TAG, "%s", payload_str);
   ESP_GOTO_ON_FALSE(esp_mqtt_client_publish(mqtt_client, topic_name, payload_str, 0, 1, 0) >= 0,
                     ESP_FAIL, cleanup, TAG, "Failed publishing payload to topic %s", topic_name);
 
@@ -638,12 +638,9 @@ esp_err_t jobs_data_handler(const char *thing_name, const char *data, int data_l
     // Search for the Job Document
     char *job_document = strstr(data, "jobDocument");
     /// TODO: Use the clientToken for this
-    if (job_document == NULL) {
-      // If the payload doesn't contain a Job Document, search for the Job ID
-      ESP_LOGD(TAG, "Payload: %.*s", data_len, data);
-      // First, look for jobs already in progress
-      char *pending_jobs = strstr(data, "inProgressJobs");
-      char *job_id       = strstr(data, "jobId");
+    if (job_document == NULL || (ota_stream.job_id[0] == '\0')) {
+      // Search for Job ID
+      char *job_id = strstr(data, "jobId");
       /// TODO: Check if job_id is NULL
       job_id += strlen("\"jobID\":");
       if (!job_id) {
@@ -652,6 +649,9 @@ esp_err_t jobs_data_handler(const char *thing_name, const char *data, int data_l
       }
       size_t job_id_len  = strstr(job_id, "\"") - job_id;
       job_id[job_id_len] = '\0';
+      ESP_LOGD(TAG, "Payload: %.*s", data_len, data);
+      // First, look for jobs already in progress
+      char *pending_jobs = strstr(data, "inProgressJobs");
       if (pending_jobs && !strcmp(job_id, ota_stream.job_id)) {
         ESP_LOGW(TAG, "This OTA Job is already in progress");
         if (s_download_task_h != NULL && eTaskGetState(s_download_task_h) != eDeleted) {

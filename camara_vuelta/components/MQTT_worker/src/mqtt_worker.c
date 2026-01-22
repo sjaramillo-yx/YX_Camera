@@ -29,15 +29,6 @@ typedef struct {
 } record_params_t;
 
 /*================= Globals =================*/
-/**
- * @name Certificates
- * @brief Certs included in the binary image.
- * @{
- */
-extern const uint8_t client_cert_pem_start[] asm("_binary_client_crt_start");
-extern const uint8_t client_key_pem_start[] asm("_binary_client_key_start");
-extern const uint8_t server_cert_pem_start[] asm("_binary_amazon_pem_start");
-/** @} */
 static cert_data_t mqtt_cert_data;
 
 /* Recording events */
@@ -55,16 +46,16 @@ static esp_mqtt_client_handle_t client = NULL;
  */
 static esp_mqtt_client_config_t mqtt_cfg = {
     /// TODO: Make this URL configurable in KConfig
-    .broker.address.uri              = "mqtts://" CONFIG_AWS_ENDPOINT ":8883",
-    .broker.verification.certificate = (const char *)server_cert_pem_start,
-    .credentials = {.authentication = {.certificate = (const char *)client_cert_pem_start,
-                                       .key         = (const char *)client_key_pem_start}},
-    .buffer      = {.size = 8192, .out_size = 8192}};
+    .broker.address.uri = "mqtts://" CONFIG_AWS_ENDPOINT ":8883",
+    .buffer             = {.size = 8192, .out_size = 8192}};
 
 /**
  * @brief The connected semaphore
  */
 static SemaphoreHandle_t mqtt_conn_semphr = NULL;
+
+/// NOTE: This starts as `true` here so it can be controlled by the main task
+static bool jobs_checked = true;
 
 /*================== Event Handlers ==================*/
 /**
@@ -93,6 +84,9 @@ static void mqtt_connected_handler(void *handler_args, esp_event_base_t base, in
   esp_mqtt_client_subscribe(client, topic_name, 0);
   // Connect the S3 uploader
   s3_uploader_on_connected();
+  // Check for Jobs (only once)
+  if (!jobs_checked)
+    jobs_get_pending(mqtt_cert_data.thing_name, "getJobs");
   // Give the connected semaphore
   xSemaphoreGive(mqtt_conn_semphr);
 }
@@ -180,7 +174,7 @@ static void mqtt_data_handler(void *handler_args, esp_event_base_t base, int32_t
   sprintf(topic_name, "$aws/things/%s/jobs/", mqtt_cert_data.thing_name);
   if (strstr(received_topic, topic_name) != NULL) {
     /// TODO: Handle payload being sent in multiple events
-    ESP_LOGD(TAG, "Passing %s to AWS jobs handler", received_topic);
+    ESP_LOGV(TAG, "Passing data from %s to AWS jobs handler", received_topic);
     jobs_data_handler(mqtt_cert_data.thing_name, event->data, event->data_len);
     goto cleanup;
   }
@@ -188,7 +182,7 @@ static void mqtt_data_handler(void *handler_args, esp_event_base_t base, int32_t
   sprintf(topic_name, "$aws/things/%s/streams/", mqtt_cert_data.thing_name);
   if (strstr(received_topic, topic_name) != NULL) {
     /// TODO: Handle payload being sent in multiple events
-    ESP_LOGD(TAG, "Passing %s to AWS streams handler", received_topic);
+    ESP_LOGV(TAG, "Passing data from %s to AWS streams handler", received_topic);
     jobs_stream_data_handler(mqtt_cert_data.thing_name, event->data, event->data_len);
     goto cleanup;
   }
@@ -294,20 +288,9 @@ static void mqttworker_rec_handler(void *handler_arg, esp_event_base_t event_bas
 }
 
 /*================== Statics ==================*/
-/**
- * @brief initialize the MQTT client with default certificates (pre-provisioning)
- */
-static esp_err_t mqttworker_defaults(void) {
-  mqtt_cfg.credentials.authentication.certificate = (const char *)client_cert_pem_start;
-  mqtt_cfg.credentials.authentication.key         = (const char *)client_key_pem_start;
-  if (client != NULL)
-    return esp_mqtt_set_config(client, &mqtt_cfg);
-  client = esp_mqtt_client_init(&mqtt_cfg);
-
-  return client != NULL ? ESP_OK : ESP_FAIL;
-}
-
-esp_err_t mqttworker_verify_flash_certs(void) {
+/*
+/// TODO: Receive a pointer to a certificate string or use the mqtt client conf
+static esp_err_t mqttworker_verify_flash_certs(void) {
   int                ret = ESP_OK;
   mbedtls_x509_crt   client;
   mbedtls_pk_context key;
@@ -339,30 +322,35 @@ esp_err_t mqttworker_verify_flash_certs(void) {
   mbedtls_x509_crt_free(&client);
   return ESP_OK;
 }
+  */
 
 /*================== Public Functions ==================*/
 esp_err_t mqttworker_init(QueueHandle_t free_chunk_queue, QueueHandle_t filled_chunk_queue) {
+  esp_err_t err;
   /* Create the connected semaphore */
   mqtt_conn_semphr = xSemaphoreCreateBinary();
 
   /* Check if certificates are in NVS */
-  esp_err_t err = nvsman_begin();
-  if (err == ESP_ERR_NVS_NOT_FOUND) {
-    /* If certificates not present, load the default configuration */
-    err = mqttworker_defaults();
-    if (err != ESP_OK) {
-      ESP_LOGE(TAG, "Couldn't configure MQTT client!");
-      /// TODO: Handle errors
-    }
-    err = provision_begin(client);
-  }
-  /// TODO: Catch other errors (not only ESP_ERR_NVS_NOT_FOUND)
-  err = nvsman_get_certs(&mqtt_cert_data);
-  ESP_LOGD(TAG, "ThingName is %s", mqtt_cert_data.thing_name);
+  ESP_RETURN_ON_ERROR(nvsman_get_certs(&mqtt_cert_data), TAG, "Couldn't get certificates from NVS");
+  // Configure the MQTT client
   mqtt_cfg.credentials.authentication.certificate = (const char *)mqtt_cert_data.client_crt;
   mqtt_cfg.credentials.authentication.key         = (const char *)mqtt_cert_data.client_key;
-  mqtt_cfg.credentials.client_id                  = (const char *)mqtt_cert_data.thing_name;
-  client                                          = esp_mqtt_client_init(&mqtt_cfg);
+  mqtt_cfg.broker.verification.certificate        = (const char *)mqtt_cert_data.root_ca;
+  if (!strcmp(mqtt_cert_data.cert_id, "provisioning")) {
+    // This means the provisioning certs will be used
+    // Initialize the client for the provision claimer
+    if (client != NULL)
+      esp_mqtt_set_config(client, &mqtt_cfg);
+    else
+      client = esp_mqtt_client_init(&mqtt_cfg);
+    ESP_LOGI(TAG, "Entering provisioning flow");
+    err = provision_begin(client, &mqtt_cert_data);
+  }
+  /// TODO: Catch other errors
+  err = nvsman_get_certs(&mqtt_cert_data);
+  ESP_LOGD(TAG, "ThingName is %s", mqtt_cert_data.thing_name);
+  mqtt_cfg.credentials.client_id = (const char *)mqtt_cert_data.thing_name;
+  client                         = esp_mqtt_client_init(&mqtt_cfg);
 
   /* Register the event handlers */
   esp_mqtt_client_register_event(client, MQTT_EVENT_CONNECTED, mqtt_connected_handler, NULL);
@@ -484,12 +472,13 @@ esp_err_t mqttworker_publish_recording_state(cJSON *recJSON) {
 esp_err_t mqttworker_get_thingname(char thing_name[128]) {
   ESP_RETURN_ON_FALSE(mqtt_cert_data.populated, ESP_ERR_INVALID_STATE, TAG,
                       "MQTT Cert data has not been populated, can't retrieve ThingName");
-  strlcpy(thing_name, mqtt_cert_data.thing_name, sizeof(thing_name));
+  strlcpy(thing_name, mqtt_cert_data.thing_name, 128);
   return ESP_OK;
 }
 
 esp_err_t mqttworker_check_for_jobs() {
   // Ask for pending jobs
   ESP_LOGD(TAG, "Getting pending jobs for %s", mqtt_cert_data.thing_name);
-  return jobs_get_pending(mqtt_cert_data.thing_name, "getJobs");
+  jobs_checked = false;
+  return ESP_OK;
 }
