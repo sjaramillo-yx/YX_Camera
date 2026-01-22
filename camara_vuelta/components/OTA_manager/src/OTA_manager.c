@@ -119,13 +119,25 @@ esp_err_t otaman_run_test(component_test test_function, ota_record_t *in_ota_rec
   esp_err_t ret = ESP_OK;
   ESP_RETURN_ON_FALSE(in_ota_rec != NULL, ESP_ERR_INVALID_ARG, TAG, "OTA record can't be NULL!");
 
+  // Get current partition state
+  const esp_partition_t *running = esp_ota_get_running_partition();
+  esp_ota_img_states_t   st      = ESP_OTA_IMG_UNDEFINED;
+  esp_ota_get_state_partition(running, &st);
+  if (st == ESP_OTA_IMG_VALID) {
+    ESP_LOGD(TAG, "This partition has already been validated");
+    return ESP_ERR_INVALID_STATE;
+  }
+
   if (in_ota_rec->magic != CONFIG_OTA_REC_MAGIC) {
     ESP_LOGE(TAG, "OTA record is invalid, magic bytes are scrambled.");
     memset(in_ota_rec, 0, sizeof(ota_record_t));
   }
+
   // Run the test
   ret = test_function(in_ota_rec->detail);
   if (ret == ESP_OK) {
+
+    esp_ota_mark_app_valid_cancel_rollback();
     return ESP_OK;
   }
   // Something failed
@@ -151,6 +163,7 @@ esp_err_t otaman_can_start(uint32_t image_size) {
   if (running) {
     esp_ota_img_states_t st = ESP_OTA_IMG_UNDEFINED;
     if (esp_ota_get_state_partition(running, &st) == ESP_OK && st == ESP_OTA_IMG_PENDING_VERIFY) {
+      ESP_LOGE(TAG, "Current partition has not been verified yet!");
       return ESP_ERR_INVALID_STATE;
     }
   }
