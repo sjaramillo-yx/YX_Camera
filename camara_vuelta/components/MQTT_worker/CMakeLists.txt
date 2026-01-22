@@ -1,10 +1,10 @@
 set(srcs
   src/mqtt_worker.c
-  src/nvs_manager.c
   src/provision_claimer.c
   src/recording_worker.c
   src/s3_uploader.c
   src/http_helpers.c
+  src/jobs_manager.c
 )
 
 set(include_dirs include)
@@ -15,14 +15,15 @@ set(
     json
     recording_events
     mbedtls
+    mqtt
     esp_http_client
     SD_manager
+    NVS_manager
 )
 
 set(
   priv_requires
-    mqtt
-    nvs_flash
+    OTA_events
 )
 
 set(priv_include_dirs private_include)

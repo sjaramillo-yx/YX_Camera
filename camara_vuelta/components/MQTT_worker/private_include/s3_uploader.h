@@ -7,14 +7,14 @@
  *
  * Device subscription rule:
  *   - Camera subscribes to START always
- *   - Camera subscribes to COMMANDS only for the currently active recordingId
+ *   - Camera subscribes to COMMANDS only for the currently active transactionId
  *
  * High-level workflow:
- *   1) Backend publishes to START with {recordingId, uploadId} to begin upload.
+ *   1) Backend publishes to START with {transactionId, uploadId} to begin upload.
  *   2) Camera checks local recording presence:
  *        - If missing: publish STATUS error and do not proceed.
  *        - If present: publish STATUS "waiting_init".
- *   3) Backend publishes init info to COMMANDS for that recordingId:
+ *   3) Backend publishes init info to COMMANDS for that transactionId:
  *        - bucket, key, part_size, total_parts
  *   4) Backend publishes each part info to COMMANDS:
  *        - part_number, url
@@ -51,7 +51,7 @@ extern "C" {
  */
 typedef struct {
   const char *thing_name;       /*!< Thing name used to build topics (required) */
-  const char *rec_dir;          /*!< Directory where <recordingId>.bin is stored (required) */
+  const char *rec_dir;          /*!< Directory where <transactionId>.bin is stored (required) */
   int         http_timeout_ms;  /*!< HTTP timeout per part PUT */
   int         http_put_retries; /*!< Retries for HTTP PUT per part */
 } s3uploader_cfg_t;

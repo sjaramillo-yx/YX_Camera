@@ -99,7 +99,7 @@ static char topic_status_active[CONFIG_S3_MAX_TOPIC_LEN];
 static start_msg_t start_message_temp;
 
 // Current upload
-static upload_ctx_t current_upload;
+static upload_ctx_t current_upload          = {0};
 static uint32_t     last_ready_for_parts_ms = 0;
 static uint8_t      ready_for_parts_count   = 0;
 
@@ -122,7 +122,8 @@ static esp_err_t publish_json(const char *topic, cJSON *obj, int qos) {
   ESP_RETURN_ON_FALSE(payload_str != NULL, ESP_FAIL, TAG, "cJSON print failed");
 
   int msg_id = esp_mqtt_client_publish(client, topic, payload_str, 0, qos, 0);
-  cJSON_free(payload_str);
+  if (payload_str)
+    cJSON_free(payload_str);
   ESP_RETURN_ON_FALSE(msg_id >= 0, ESP_FAIL, TAG, "mqtt publish failed");
   return ESP_OK;
 }
@@ -510,7 +511,7 @@ static bool parse_start_payload(const char *data, int len, start_msg_t *out) {
   if (!j)
     return false;
 
-  const cJSON *rid = cJSON_GetObjectItem(j, "recordingId");
+  const cJSON *rid = cJSON_GetObjectItem(j, "transactionId");
   if (!cJSON_IsString(rid))
     rid = cJSON_GetObjectItem(j, "recording_id");
 
@@ -645,7 +646,9 @@ esp_err_t s3_uploader_on_connected(void) {
                       "Subscribe failed start");
 
   // If a session is active during reconnect, resubscribe to its commands topic
-  subscribe_commands_topic();
+  if (current_upload.recording_id[0] != '\0') {
+    subscribe_commands_topic();
+  }
   return ESP_OK;
 }
 

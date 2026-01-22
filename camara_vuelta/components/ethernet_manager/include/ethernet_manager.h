@@ -46,6 +46,16 @@ extern "C" {
  */
 esp_err_t ethman_init(esp_eth_handle_t *eth_handle_out);
 
+/**
+ * @brief Wait for the "Got IP" event.
+ */
+esp_err_t ethman_wait_ip(int ms_to_wait);
+
+/**
+ * @brief Wait for SNTP synchronization
+ */
+esp_err_t ethman_wait_sntp(int ms_to_wait);
+
 #ifdef __cplusplus
 }
 #endif

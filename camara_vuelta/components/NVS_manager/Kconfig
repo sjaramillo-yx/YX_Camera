@@ -1,0 +1,6 @@
+menu "NVS Manager"
+  config OTA_REC_MAGIC
+    int "Magic number to check NVS record integrity"
+    default 1330921810
+  
+endmenu

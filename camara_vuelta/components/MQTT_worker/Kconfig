@@ -58,7 +58,7 @@ menu "S3 Uploader"
             range 16 256
 
         config S3_MAX_RECORDING_ID
-            int "Max recordingId length"
+            int "Max transactionId length"
             default 64
             range 16 256
 
@@ -94,4 +94,25 @@ menu "S3 Uploader"
 
     endmenu
 
+endmenu
+
+menu "AWS Jobs configuration"
+    menu "MQTT File Stream downloader configuration"
+        config DATA_BLOCK_COUNT
+            int "Number of data blocks to allocate for download"
+            default 5
+        
+        config DATA_BLOCK_SIZE
+            int "Length of the buffer allocated for each data block"
+            default 4096
+            range 256 131072
+        
+        config DATA_BLOCK_TIMEOUT_MS
+            int "Amount of milliseconds to wait for a data block before timing out"
+            default 120000
+
+        config DATA_BLOCK_MAX_RETRY
+            int "Max amount of retries when waiting for a data block"
+            default  5
+    endmenu
 endmenu

@@ -6,7 +6,6 @@
  * @ingroup mqtt_worker
  */
 #include "provision_claimer.h"
-#include "nvs_manager.h"
 
 /*-------- Globals ---------*/
 /// TODO: Remove static memory and move to dynamic heap allocations
@@ -27,15 +26,9 @@ static mqtt_args_t mqtt_args = {0};
  */
 static char ownership_tkn[1024];
 /**
- * @brief The obtained ThingName
+ * @brief The obtained certificate data.
  */
-static char thing_name[512];
-/**
- * @brief Byffers for certificate and private key
- */
-static char device_certificate[4096];
-static char private_key[4096];
-static char certificate_id[1024];
+static cert_data_t *obtained_certs;
 /**
  * @brief The Task handle for the provisioning task
  */
@@ -126,7 +119,8 @@ static void mqtt_subscribed_handler(void *handler_args, esp_event_base_t base, i
   default:
     break;
   }
-  cJSON_Delete(payload);
+  if (payload)
+    cJSON_Delete(payload);
 }
 
 /**
@@ -156,9 +150,9 @@ static void mqtt_data_handler(void *handler_args, esp_event_base_t base, int32_t
     snprintf(ownership_tkn, sizeof(ownership_tkn), "%s", token->valuestring);
     ESP_LOGD(TAG, "certificateOwnershipToken=%s", ownership_tkn);
     // Update client configuration
-    snprintf(device_certificate, sizeof(device_certificate), "%s", cert->valuestring);
-    snprintf(certificate_id, sizeof(certificate_id), "%s", certId->valuestring);
-    snprintf(private_key, sizeof(private_key), "%s", key->valuestring);
+    strlcpy(obtained_certs->client_crt, cert->valuestring, sizeof(obtained_certs->client_crt));
+    strlcpy(obtained_certs->cert_id, certId->valuestring, sizeof(obtained_certs->cert_id));
+    strlcpy(obtained_certs->client_key, key->valuestring, sizeof(obtained_certs->client_key));
     // Suscribe to Thing creation reserved topics
     esp_mqtt_client_subscribe(client,
                               "$aws/provisioning-templates/" CONFIG_PROJ_BASE_NAME
@@ -177,13 +171,15 @@ static void mqtt_data_handler(void *handler_args, esp_event_base_t base, int32_t
     // Extract thing name
     new_thing_name = cJSON_GetObjectItem(payload, "thingName");
     ESP_LOGI(TAG, "Thing Name = %s", new_thing_name->valuestring);
-    snprintf(thing_name, sizeof(thing_name), "%s", new_thing_name->valuestring);
+    strlcpy(obtained_certs->thing_name, new_thing_name->valuestring,
+            sizeof(obtained_certs->thing_name));
     xTaskNotifyGive(provision_handle);
     break;
   default:
     break;
   }
-  cJSON_Delete(payload);
+  if (payload)
+    cJSON_Delete(payload);
 }
 
 /*--------------- FreeRTOS Tasks ---------------*/
@@ -204,17 +200,7 @@ static void provision_task(void *p) {
   ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
   /* Write to NVS */
-  cert_data_t *obtained_certificates = malloc(sizeof(cert_data_t));
-  if (obtained_certificates == NULL) {
-    ESP_LOGE(TAG, "Insufficient memory!");
-  }
-  /// TODO: Pass this strings as arguments instead of a structure to save memory
-  snprintf(obtained_certificates->client_crt, sizeof(device_certificate), device_certificate);
-  snprintf(obtained_certificates->client_key, sizeof(private_key), private_key);
-  snprintf(obtained_certificates->cert_id, sizeof(certificate_id), certificate_id);
-  snprintf(obtained_certificates->thing_name, sizeof(thing_name), thing_name);
-  nvsman_save_certs(obtained_certificates);
-  free(obtained_certificates);
+  nvsman_save_certs(obtained_certs);
 
   /* Close the MQTT client */
   esp_mqtt_client_disconnect(client);
@@ -229,7 +215,8 @@ static void provision_task(void *p) {
 }
 
 /*--------- Functions ----------*/
-esp_err_t provision_begin(esp_mqtt_client_handle_t mqtt_client) {
+esp_err_t provision_begin(esp_mqtt_client_handle_t mqtt_client, cert_data_t *cert_data) {
+  obtained_certs          = cert_data;
   provisioning_semphr     = xSemaphoreCreateBinary();
   BaseType_t task_created = xTaskCreate(provision_task, "BeginProvision", 4096, (void *)mqtt_client,
                                         5, &provision_handle);
