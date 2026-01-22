@@ -7,17 +7,37 @@ cmake_minimum_required(VERSION 3.5)
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(camara_vuelta)
 
-if(CONFIG_AWS_IOT_CERT_PEM_PATH STREQUAL "" OR
-   CONFIG_AWS_IOT_PRIV_KEY_PATH STREQUAL "" OR
-   CONFIG_AWS_IOT_ROOT_CA_PATH STREQUAL "")
-  message(FATAL_ERROR "Set AWS IoT cert/key paths via menuconfig (or provide env vars).")
+# --- Cert bundle generation (skip until configured) --------------------------
+
+# Prefer menuconfig values, but allow environment variable fallback
+set(_cert_path "${CONFIG_AWS_IOT_CERT_PEM_PATH}")
+set(_key_path  "${CONFIG_AWS_IOT_PRIV_KEY_PATH}")
+set(_ca_path   "${CONFIG_AWS_IOT_ROOT_CA_PATH}")
+
+if(_cert_path STREQUAL "")
+  set(_cert_path "$ENV{AWS_IOT_CERT_PEM_PATH}")
+endif()
+if(_key_path STREQUAL "")
+  set(_key_path "$ENV{AWS_IOT_PRIV_KEY_PATH}")
+endif()
+if(_ca_path STREQUAL "")
+  set(_ca_path "$ENV{AWS_IOT_ROOT_CA_PATH}")
 endif()
 
-set(AWS_IOT_CERT_PEM  "${CONFIG_AWS_IOT_CERT_PEM_PATH}")
-set(AWS_IOT_PRIV_KEY  "${CONFIG_AWS_IOT_PRIV_KEY_PATH}")
-set(AWS_IOT_ROOT_CA   "${CONFIG_AWS_IOT_ROOT_CA_PATH}")
+if(_cert_path STREQUAL "" OR _key_path STREQUAL "" OR _ca_path STREQUAL "")
+  message(STATUS
+    "AWS IoT cert paths not set yet; skipping certs partition generation. "
+    "Run 'idf.py menuconfig' (or set env vars AWS_IOT_CERT_PEM_PATH/AWS_IOT_PRIV_KEY_PATH/AWS_IOT_ROOT_CA_PATH)."
+  )
+else()
+  # Convert to absolute paths to avoid working-directory surprises
+  get_filename_component(AWS_IOT_CERT_PEM "${_cert_path}" ABSOLUTE BASE_DIR "${CMAKE_SOURCE_DIR}")
+  get_filename_component(AWS_IOT_PRIV_KEY "${_key_path}" ABSOLUTE BASE_DIR "${CMAKE_SOURCE_DIR}")
+  get_filename_component(AWS_IOT_ROOT_CA  "${_ca_path}"  ABSOLUTE BASE_DIR "${CMAKE_SOURCE_DIR}")
 
-set(GEN_CSV "${CMAKE_BINARY_DIR}/certificates.csv")
-configure_file("${CMAKE_SOURCE_DIR}/certificates.csv" "${GEN_CSV}" @ONLY)
+  set(GEN_CSV "${CMAKE_BINARY_DIR}/certificates.csv")
+  configure_file("${CMAKE_SOURCE_DIR}/certificates.csv" "${GEN_CSV}" @ONLY)
 
-nvs_create_partition_image(certs "${GEN_CSV}")
+  # No FLASH_IN_PROJECT: won't overwrite on every normal flash
+  nvs_create_partition_image(certs "${GEN_CSV}")
+endif()
