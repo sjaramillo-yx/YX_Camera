@@ -54,6 +54,9 @@ static esp_mqtt_client_config_t mqtt_cfg = {
  */
 static SemaphoreHandle_t mqtt_conn_semphr = NULL;
 
+/// NOTE: This starts as `true` here so it can be controlled by the main task
+static bool jobs_checked = true;
+
 /*================== Event Handlers ==================*/
 /**
  * @brief The handler for the `MQTT_EVENT_CONNECTED` event
@@ -81,6 +84,9 @@ static void mqtt_connected_handler(void *handler_args, esp_event_base_t base, in
   esp_mqtt_client_subscribe(client, topic_name, 0);
   // Connect the S3 uploader
   s3_uploader_on_connected();
+  // Check for Jobs (only once)
+  if (!jobs_checked)
+    jobs_get_pending(mqtt_cert_data.thing_name, "getJobs");
   // Give the connected semaphore
   xSemaphoreGive(mqtt_conn_semphr);
 }
@@ -168,7 +174,7 @@ static void mqtt_data_handler(void *handler_args, esp_event_base_t base, int32_t
   sprintf(topic_name, "$aws/things/%s/jobs/", mqtt_cert_data.thing_name);
   if (strstr(received_topic, topic_name) != NULL) {
     /// TODO: Handle payload being sent in multiple events
-    ESP_LOGD(TAG, "Passing %s to AWS jobs handler", received_topic);
+    ESP_LOGV(TAG, "Passing data from %s to AWS jobs handler", received_topic);
     jobs_data_handler(mqtt_cert_data.thing_name, event->data, event->data_len);
     goto cleanup;
   }
@@ -176,7 +182,7 @@ static void mqtt_data_handler(void *handler_args, esp_event_base_t base, int32_t
   sprintf(topic_name, "$aws/things/%s/streams/", mqtt_cert_data.thing_name);
   if (strstr(received_topic, topic_name) != NULL) {
     /// TODO: Handle payload being sent in multiple events
-    ESP_LOGD(TAG, "Passing %s to AWS streams handler", received_topic);
+    ESP_LOGV(TAG, "Passing data from %s to AWS streams handler", received_topic);
     jobs_stream_data_handler(mqtt_cert_data.thing_name, event->data, event->data_len);
     goto cleanup;
   }
@@ -466,12 +472,13 @@ esp_err_t mqttworker_publish_recording_state(cJSON *recJSON) {
 esp_err_t mqttworker_get_thingname(char thing_name[128]) {
   ESP_RETURN_ON_FALSE(mqtt_cert_data.populated, ESP_ERR_INVALID_STATE, TAG,
                       "MQTT Cert data has not been populated, can't retrieve ThingName");
-  strlcpy(thing_name, mqtt_cert_data.thing_name, sizeof(thing_name));
+  strlcpy(thing_name, mqtt_cert_data.thing_name, 128);
   return ESP_OK;
 }
 
 esp_err_t mqttworker_check_for_jobs() {
   // Ask for pending jobs
   ESP_LOGD(TAG, "Getting pending jobs for %s", mqtt_cert_data.thing_name);
-  return jobs_get_pending(mqtt_cert_data.thing_name, "getJobs");
+  jobs_checked = false;
+  return ESP_OK;
 }

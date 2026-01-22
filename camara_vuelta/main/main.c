@@ -36,6 +36,10 @@ static esp_err_t ota_rec_retrieved;
 static esp_event_loop_handle_t OTA_event_h;
 
 /*================== Static Functions ==================*/
+static esp_err_t dummy_test(char out_msg[128]) {
+  strlcpy(out_msg, "This is a test", 128);
+  return ESP_OK;
+}
 
 static esp_err_t publish_rec_state() {
   esp_err_t ret       = ESP_OK;
@@ -84,7 +88,7 @@ void app_main(void) {
   esp_log_level_set("transport_base", ESP_LOG_INFO);
   esp_log_level_set("transport", ESP_LOG_INFO);
   esp_log_level_set("Provision Claimer", ESP_LOG_INFO);
-  esp_log_level_set("MQTT Worker", ESP_LOG_INFO);
+  esp_log_level_set("MQTT Worker", ESP_LOG_DEBUG);
   esp_log_level_set("S3Uploader", ESP_LOG_INFO);
   esp_log_level_set("NVS Manager", ESP_LOG_INFO);
   esp_log_level_set("Video Manager", ESP_LOG_INFO);
@@ -152,6 +156,10 @@ void app_main(void) {
   // Initialize the Video Manager
   vman_inited = vman_init();
 
+  // Test the OTA partition
+  // ota_test_boot_ota0_once();
+  esp_err_t part_test = otaman_run_test(dummy_test, ota_rec);
+
   // Connect to AWS
   if (ethman_wait_ip(1000) == ESP_OK)
     ethman_wait_sntp(10000);
@@ -170,20 +178,25 @@ void app_main(void) {
   // Publish initial state
   hello_published = mqttworker_publish_initial_state(sdJSON, vmanJSON);  // Also frees cJSON memory
 
+  ota_result_t ota_res = {.err_code = ota_rec->esp_err};
+  strlcpy(ota_res.job_id, ota_rec->job_id, sizeof(ota_res.job_id));
+  strlcpy(ota_res.detail, ota_rec->detail, sizeof(ota_res.detail));
+  mqttworker_get_thingname(ota_res.thing_name);
   // If OTA partition is in failure state, tell the MQTT manager to update the Job
   if (last_bad != NULL) {
     /// TODO: Post an event including the neccesary details in the event data pointer
-    ota_result_t ota_res = {.err_code = ota_rec->esp_err};
-    strlcpy(ota_res.job_id, ota_rec->job_id, sizeof(ota_res.job_id));
-    strlcpy(ota_res.detail, ota_rec->detail, sizeof(ota_res.detail));
-    mqttworker_get_thingname(ota_res.thing_name);
     /// TODO: Remove portMAX_DELAY and fail accordingly
     esp_event_post_to(OTA_event_h, OTA_EVENTS, OTA_JOB_ERROR, &ota_res, sizeof(ota_result_t),
                       portMAX_DELAY);
     /// TODO: If no connection is available, retry on connected
     /// TODO: Clear the OTA record after this.
+  } else if (strcmp(running->label, "factory") && part_test != ESP_ERR_INVALID_STATE) {
+    /// TODO: Publish OTA partition test results.
+    esp_event_post_to(OTA_event_h, OTA_EVENTS, OTA_JOB_DONE, &ota_res, sizeof(ota_result_t),
+                      portMAX_DELAY);
   }
 
+  mqttworker_check_for_jobs();
   while (true) {
     vTaskDelay(pdMS_TO_TICKS(30000));
     sdman_getJSON(&sdJSON);
@@ -191,7 +204,6 @@ void app_main(void) {
     if (vman_is_recording()) {
       publish_rec_state();
     }  // end if
-    mqttworker_check_for_jobs();
   }  // end while
 }  // end app_main
 
