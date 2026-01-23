@@ -1,0 +1,194 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "IoTConsoleReadOnly",
+      "Effect": "Allow",
+      "Action": [
+        "iot:Get*",
+        "iot:List*",
+        "iot:Describe*",
+        "iot:SearchIndex",
+        "iot:DescribeEndpoint",
+        "iot:GetRegistrationCode"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DescribeIoTEndpoint",
+      "Effect": "Allow",
+      "Action": "iot:DescribeEndpoint",
+      "Resource": "*"
+    },
+    {
+      "Sid": "ConnectWithTestClientId",
+      "Effect": "Allow",
+      "Action": "iot:Connect",
+      "Resource": "arn:aws:iot:${REGION}:${ACCOUNT_ID}:client/*",
+      "Condition": {
+        "StringLike": {
+          "iot:ClientId": "iotconsole-*"
+        }
+      }
+    },
+    {
+      "Sid": "PublishToProdTopics",
+      "Effect": "Allow",
+      "Action": "iot:Publish",
+      "Resource": [
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:topic/${STACK_BASE}/prod/*"
+      ]
+    },
+    {
+      "Sid": "SubscribeToProdTopicFilters",
+      "Effect": "Allow",
+      "Action": "iot:Subscribe",
+      "Resource": [
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:topicfilter/${STACK_BASE}/prod/*"
+      ]
+    },
+    {
+      "Sid": "ReceiveFromProdTopics",
+      "Effect": "Allow",
+      "Action": "iot:Receive",
+      "Resource": [
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:topic/${STACK_BASE}/prod/*"
+      ]
+    },
+    {
+      "Sid": "IoTManageProdNamedResources",
+      "Effect": "Allow",
+      "Action": [
+        "iot:CreateThing",
+        "iot:UpdateThing",
+        "iot:DeleteThing",
+        "iot:CreateThingType",
+        "iot:DeprecateThingType",
+        "iot:DeleteThingType",
+        "iot:CreateThingGroup",
+        "iot:UpdateThingGroup",
+        "iot:DeleteThingGroup",
+        "iot:CreatePolicy",
+        "iot:DeletePolicy",
+        "iot:CreatePolicyVersion",
+        "iot:DeletePolicyVersion",
+        "iot:SetDefaultPolicyVersion",
+        "iot:CreateTopicRule",
+        "iot:ReplaceTopicRule",
+        "iot:DeleteTopicRule",
+        "iot:EnableTopicRule",
+        "iot:DisableTopicRule",
+        "iot:CreateRoleAlias",
+        "iot:UpdateRoleAlias",
+        "iot:DeleteRoleAlias",
+        "iot:CreateProvisioningTemplate",
+        "iot:UpdateProvisioningTemplate",
+        "iot:DeleteProvisioningTemplate",
+        "iot:CreateProvisioningClaim",
+        "iot:TagResource",
+        "iot:UntagResource"
+      ],
+      "Resource": [
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:thing/${STACK_BASE}-*-prod",
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:thinggroup/${STACK_BASE}-*-prod",
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:thingtype/${STACK_BASE}-*-prod",
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:policy/${STACK_BASE}-*-prod",
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:rule/${STACK_BASE}_*_prod",
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:rolealias/${STACK_BASE}-*-prod",
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:provisioningtemplate/${STACK_BASE}-*-prod"
+      ]
+    },
+    {
+      "Sid": "IoTAttachmentsAndMemberships",
+      "Effect": "Allow",
+      "Action": [
+        "iot:AttachPolicy",
+        "iot:DetachPolicy",
+        "iot:AttachPrincipalPolicy",
+        "iot:DetachPrincipalPolicy",
+        "iot:AttachThingPrincipal",
+        "iot:DetachThingPrincipal",
+        "iot:AddThingToThingGroup",
+        "iot:RemoveThingFromThingGroup"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "IoTCertificatesBroad",
+      "Effect": "Allow",
+      "Action": [
+        "iot:CreateKeysAndCertificate",
+        "iot:CreateCertificateFromCsr",
+        "iot:RegisterCertificateWithoutCA",
+        "iot:UpdateCertificate",
+        "iot:DeleteCertificate",
+        "iot:DescribeCertificate"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "PassIoTRulesRoleProd",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": [
+        "arn:aws:iam::${ACCOUNT_ID}:role/IoT-rules-role-${STACK_BASE}-prod"
+      ],
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "iot.amazonaws.com"
+        }
+      }
+    },
+    {
+      "Sid": "ConsoleHelpersReadOnly",
+      "Effect": "Allow",
+      "Action": [
+        "iam:ListRoles",
+        "iam:GetRole",
+        "lambda:ListFunctions",
+        "lambda:GetFunction",
+        "lambda:ListVersionsByFunction"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "CloudWatchMetricsReadForLambdaMonitorTab",
+      "Effect": "Allow",
+      "Action": [
+        "cloudwatch:GetMetricData",
+        "cloudwatch:GetMetricStatistics",
+        "cloudwatch:ListMetrics",
+        "cloudwatch:DescribeAlarms",
+        "cloudwatch:DescribeAlarmsForMetric",
+        "cloudwatch:DescribeAlarmHistory"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "LogsDescribeLogGroupsNeedsStar",
+      "Effect": "Allow",
+      "Action": [
+        "logs:DescribeLogGroups"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "CloudWatchLogsReadForSpecificLambdaPattern",
+      "Effect": "Allow",
+      "Action": [
+        "logs:DescribeLogStreams",
+        "logs:GetLogEvents",
+        "logs:FilterLogEvents",
+        "logs:GetLogGroupFields",
+        "logs:DescribeQueries",
+        "logs:StartQuery",
+        "logs:GetQueryResults",
+        "logs:StopQuery"
+      ],
+      "Resource": [
+        "arn:aws:logs:${REGION}:${ACCOUNT_ID}:log-group:/aws/lambda/${STACK_BASE}_*_prod",
+        "arn:aws:logs:${REGION}:${ACCOUNT_ID}:log-group:/aws/lambda/${STACK_BASE}_*_prod:*"
+      ]
+    }
+  ]
+}

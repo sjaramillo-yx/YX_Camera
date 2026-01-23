@@ -24,6 +24,18 @@
       ]
     },
     {
+      "Sid": "CloudFormationGlobalReadList",
+      "Effect": "Allow",
+      "Action": [
+        "cloudformation:ListStacks",
+        "cloudformation:DescribeAccountLimits",
+        "cloudformation:ValidateTemplate",
+        "cloudformation:GetTemplateSummary",
+        "cloudformation:DescribeStackDriftDetectionStatus"
+      ],
+      "Resource": "*"
+    },
+    {
       "Sid": "CloudFormationProdOnly",
       "Effect": "Allow",
       "Action": [
@@ -36,7 +48,24 @@
         "cloudformation:Describe*",
         "cloudformation:GetTemplateSummary",
         "cloudformation:List*",
-        "cloudformation:ValidateTemplate"
+        "cloudformation:ValidateTemplate",
+        "cloudformation:DetectStackDrift",
+        "cloudformation:DetectStackResourceDrift",
+        "cloudformation:DescribeStackResourceDrifts",
+        "cloudformation:DescribeStacks",
+        "cloudformation:DescribeStackResources",
+        "cloudformation:DescribeStackResource",
+        "cloudformation:DescribeStackEvents",
+        "cloudformation:GetTemplate",
+        "cloudformation:GetTemplateSummary",
+        "cloudformation:CancelUpdateStack",
+        "cloudformation:ContinueUpdateRollback",
+        "cloudformation:SetStackPolicy",
+        "cloudformation:UpdateTerminationProtection",
+        "cloudformation:DescribeChangeSet",
+        "cloudformation:GetStackPolicy",
+        "cloudformation:DescribeStackDriftDetectionStatus",
+        "cloudformation:ListStackResources"
       ],
       "Resource": [
         "arn:aws:cloudformation:${REGION}:${ACCOUNT_ID}:stack/${STACK_BASE}-prod/*",
@@ -62,6 +91,12 @@
           "aws:MultiFactorAuthPresent": "true"
         }
       }
+    },
+    {
+      "Sid": "CloudTrailEventHistoryRead",
+      "Effect": "Allow",
+      "Action": "cloudtrail:LookupEvents",
+      "Resource": "*"
     }
   ]
 }

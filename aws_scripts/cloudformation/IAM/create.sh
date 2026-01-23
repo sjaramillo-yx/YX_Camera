@@ -499,6 +499,15 @@ if [[ -n "${PM_USER}" ]]; then
   put_inline_user_policy "${PM_USER}" "AssumeYxDeployerProd" "${ROOT_DIR}/policies/assume-deployer-prod.json"
   ensure_role "yx-deployer-prod" "${ROOT_DIR}/roles/deployer-trust-user.json" "${PM_USER}"
   maybe_create_access_key "${PM_USER}"
+
+  iot_prod_policy_arn="$(ensure_managed_policy "yx-iot-prod-policy" "${ROOT_DIR}/policies/iot-prod-policy.json")"
+  ensure_attach_role_policy "yx-deployer-prod" "${iot_prod_policy_arn}"
+  ota_prod_policy_arn="$(ensure_managed_policy "yx-ota-prod-policy" "${ROOT_DIR}/policies/ota-prod-policy.json")"
+  ensure_attach_role_policy "yx-deployer-prod" "${ota_prod_policy_arn}"
+  ddb_prod_policy_arn="$(ensure_managed_policy "yx-ddb-prod-policy" "${ROOT_DIR}/policies/ddb-prod-policy.json")"
+  ensure_attach_role_policy "yx-deployer-prod" "${ddb_prod_policy_arn}"
+  s3_prod_policy_arn="$(ensure_managed_policy "yx-s3-prod-policy" "${ROOT_DIR}/policies/s3-prod-policy.json")"
+  ensure_attach_role_policy "yx-deployer-prod" "${s3_prod_policy_arn}"
 else
   log "Skipping prod deployer role + PM user (no --pm-user provided)."
 fi
