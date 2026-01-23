@@ -54,8 +54,7 @@ static esp_mqtt_client_config_t mqtt_cfg = {
  */
 static SemaphoreHandle_t mqtt_conn_semphr = NULL;
 
-/// NOTE: This starts as `true` here so it can be controlled by the main task
-static bool jobs_checked = true;
+static bool jobs_checked = false;
 
 /*================== Event Handlers ==================*/
 /**
@@ -85,8 +84,10 @@ static void mqtt_connected_handler(void *handler_args, esp_event_base_t base, in
   // Connect the S3 uploader
   s3_uploader_on_connected();
   // Check for Jobs (only once)
-  if (!jobs_checked)
+  if (!jobs_checked) {
     jobs_get_pending(mqtt_cert_data.thing_name, "getJobs");
+    jobs_checked = true;
+  }
   // Give the connected semaphore
   xSemaphoreGive(mqtt_conn_semphr);
 }
@@ -479,6 +480,7 @@ esp_err_t mqttworker_get_thingname(char thing_name[128]) {
 esp_err_t mqttworker_check_for_jobs() {
   // Ask for pending jobs
   ESP_LOGD(TAG, "Getting pending jobs for %s", mqtt_cert_data.thing_name);
-  jobs_checked = false;
+  jobs_get_pending(mqtt_cert_data.thing_name, "getJobs");
+  jobs_checked = true;
   return ESP_OK;
 }

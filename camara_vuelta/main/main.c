@@ -160,24 +160,6 @@ void app_main(void) {
   // ota_test_boot_ota0_once();
   esp_err_t part_test = otaman_run_test(dummy_test, ota_rec);
 
-  // Connect to AWS
-  if (ethman_wait_ip(1000) == ESP_OK)
-    ethman_wait_sntp(10000);
-  if (mqtt_w_inited == ESP_OK) {
-    if ((err = mqttworker_begin(10000)) != ESP_OK)
-      ESP_LOGE(TAG, "MQTT Worker couldn't begin: %s (0x%02x)", esp_err_to_name(err), err);
-  } else
-    ESP_LOGW(TAG, "The MQTT worker couldn't be initialized. No connection will be attempted");
-
-  // Get information about the SD Card
-  cJSON *sdJSON;
-  sdman_getJSON(&sdJSON);
-  /// Get information about the Video Manager
-  cJSON *vmanJSON;
-  vman_getJSON(&vmanJSON);
-  // Publish initial state
-  hello_published = mqttworker_publish_initial_state(sdJSON, vmanJSON);  // Also frees cJSON memory
-
   ota_result_t ota_res = {.err_code = ota_rec->esp_err};
   strlcpy(ota_res.job_id, ota_rec->job_id, sizeof(ota_res.job_id));
   strlcpy(ota_res.detail, ota_rec->detail, sizeof(ota_res.detail));
@@ -196,7 +178,24 @@ void app_main(void) {
                       portMAX_DELAY);
   }
 
-  mqttworker_check_for_jobs();
+  // Connect to AWS
+  if (ethman_wait_ip(1000) == ESP_OK)
+    ethman_wait_sntp(10000);
+  if (mqtt_w_inited == ESP_OK) {
+    if ((err = mqttworker_begin(10000)) != ESP_OK)
+      ESP_LOGE(TAG, "MQTT Worker couldn't begin: %s (0x%02x)", esp_err_to_name(err), err);
+  } else
+    ESP_LOGW(TAG, "The MQTT worker couldn't be initialized. No connection will be attempted");
+
+  // Get information about the SD Card
+  cJSON *sdJSON;
+  sdman_getJSON(&sdJSON);
+  /// Get information about the Video Manager
+  cJSON *vmanJSON;
+  vman_getJSON(&vmanJSON);
+  // Publish initial state
+  hello_published = mqttworker_publish_initial_state(sdJSON, vmanJSON);  // Also frees cJSON memory
+
   while (true) {
     vTaskDelay(pdMS_TO_TICKS(30000));
     sdman_getJSON(&sdJSON);
