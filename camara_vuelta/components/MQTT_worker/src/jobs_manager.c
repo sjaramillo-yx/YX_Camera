@@ -52,6 +52,10 @@ static QueueHandle_t s_filled_chunk_q = NULL;  // items: ota_chunk_t
 static QueueHandle_t s_free_stream_data_q;     // items: data_block_t
 static QueueHandle_t s_filled_stream_data_q;   // items: data_block_t
 
+// Event loops and handlers
+static esp_event_loop_handle_t      OTA_event_h = NULL;
+static esp_event_handler_instance_t ota_handler_h;
+
 /*================== MQTT Helpers ==================*/
 /**
  * @brief Describe a file stream for a given streamID
@@ -119,7 +123,6 @@ static esp_err_t file_get_stream(char *thing_name, char *client_token, get_strea
     cJSON_AddNumberToObject(payload, "n", get_conf.n_blocks);
   }
   if (get_conf.block_bitmap > 0) {
-    /// Bitmap must be encoded to Base64
     // Convert bitmap integer to little-endian bytes (LSB first) and base64-encode them.
     uint32_t bm = (uint32_t)get_conf.block_bitmap;
     uint8_t  bitmap_bytes[sizeof(bm)];
@@ -476,7 +479,7 @@ void download_task(void *arg) {
                                 : CONFIG_DATA_BLOCK_COUNT;
     get_conf.block_bitmap = -1;
     ESP_LOGD(TAG, "Getting blocks %d-%d", CONFIG_DATA_BLOCK_COUNT * i,
-             CONFIG_DATA_BLOCK_COUNT * i + (CONFIG_DATA_BLOCK_COUNT - 1));
+             CONFIG_DATA_BLOCK_COUNT * i + (get_conf.n_blocks - 1));
     ESP_GOTO_ON_ERROR(file_get_stream(ota_stream.thing_name, "getOtaStreamTest", get_conf), cleanup,
                       TAG, "Couldn't publish get stream request");
     // Set the bitmap to all "1s" to track received blocks
@@ -744,25 +747,39 @@ esp_err_t jobs_stream_data_handler(const char *thing_name, const char *data, int
   return ret;
 }
 
+/*================== Initalize, Begin, Stop and Deinitialize ==================*/
 esp_err_t jobs_init(esp_mqtt_client_handle_t client, QueueHandle_t free_chunk_queue,
                     QueueHandle_t filled_chunk_queue) {
   mqtt_client      = client;
   s_free_chunk_q   = free_chunk_queue;
   s_filled_chunk_q = filled_chunk_queue;
   // Get the OTA event loop handles
-  esp_event_loop_handle_t OTA_event_h = NULL;
   OTA_eventloop_get_handle(&OTA_event_h);
-  ESP_RETURN_ON_ERROR(esp_event_handler_instance_register_with(
-                          OTA_event_h, OTA_EVENTS, ESP_EVENT_ANY_ID, ota_event_handler, NULL, NULL),
+  ESP_RETURN_ON_ERROR(esp_event_handler_instance_register_with(OTA_event_h, OTA_EVENTS,
+                                                               ESP_EVENT_ANY_ID, ota_event_handler,
+                                                               NULL, &ota_handler_h),
                       TAG, "Couldn't register OTA events handler");
   // Initialize the buffers and queues
   /// TODO: Change function names
   ESP_LOGI(TAG, "Initializing buffers and queues.");
   allocate_pools();
   create_queues();
-  // Create the steam data queue
-  s_free_stream_data_q   = xQueueCreate(5, sizeof(data_block_t));
-  s_filled_stream_data_q = xQueueCreate(5, sizeof(data_block_t));
   /// TODO: Check for errors
+  return ESP_OK;
+}
+
+esp_err_t jobs_deinit(void) {
+  vQueueDelete(s_filled_stream_data_q);
+  vQueueDelete(s_free_stream_data_q);
+
+  for (int i = 0; i < CONFIG_DATA_BLOCK_COUNT; ++i) {
+    if (s_data_block_buffers[i])
+      heap_caps_aligned_free(s_data_block_buffers[i]);
+  }
+
+  ESP_RETURN_ON_ERROR(esp_event_handler_instance_unregister_with(OTA_event_h, OTA_EVENTS,
+                                                                 ESP_EVENT_ANY_ID, ota_handler_h),
+                      TAG, "Couldn't unregister the OTA event handler");
+
   return ESP_OK;
 }

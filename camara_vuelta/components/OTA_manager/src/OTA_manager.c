@@ -193,6 +193,7 @@ esp_err_t otaman_start_update(uint32_t image_size) {
   return ESP_OK;
 }
 
+/*================== Initalize, Begin, Stop and Deinitialize ==================*/
 esp_err_t otaman_init(QueueHandle_t *free_chunk_queue, QueueHandle_t *filled_chunk_queue) {
   esp_err_t ret = ESP_OK;
   ESP_LOGI(TAG, "Initializing buffers and queues.");
@@ -207,5 +208,18 @@ esp_err_t otaman_init(QueueHandle_t *free_chunk_queue, QueueHandle_t *filled_chu
   *filled_chunk_queue = s_filled_chunk_q;
   // Move to ready state and return
   otaman_state = OTA_MAN_READY;
+  return ESP_OK;
+}
+
+esp_err_t otaman_deinit(void) {
+  vQueueDelete(s_filled_chunk_q);
+  vQueueDelete(s_free_chunk_q);
+
+  for (int i = 0; i < CONFIG_OTA_CHUNK_COUNT; ++i) {
+    if (s_ota_chunks[i])
+      heap_caps_aligned_free(s_ota_chunks[i]);
+  }
+
+  otaman_state = OTA_MAN_UNITIALIZED;
   return ESP_OK;
 }

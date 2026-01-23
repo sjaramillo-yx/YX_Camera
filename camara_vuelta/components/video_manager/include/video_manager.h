@@ -45,6 +45,11 @@ extern "C" {
 esp_err_t vman_init(void);
 
 /**
+ * @brief Deinitialize the Video Manager.
+ */
+esp_err_t vman_deinit(void);
+
+/**
  * @brief Start a recording
  *
  * @param filename the name of the file where the video will be written

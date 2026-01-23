@@ -71,3 +71,8 @@ esp_err_t jobs_stream_data_handler(const char *thing_name, const char *data, int
  */
 esp_err_t jobs_init(esp_mqtt_client_handle_t client, QueueHandle_t free_chunk_queue,
                     QueueHandle_t filled_chunk_queue);
+
+/**
+ * @brief Deinitialize the AWSJobsManager.
+ */
+esp_err_t jobs_deinit(void);

@@ -15,15 +15,6 @@ extern "C" {
 #endif
 
 /**
- * @brief Handle of SCCB interface and sensor
- */
-typedef struct {
-  esp_sccb_io_handle_t sccb_handle; /*!< SCCB io handle that created by `sccb_new_i2c_io` */
-  i2c_master_bus_handle_t
-      i2c_bus_handle; /*!< I2C bus handle that created by `i2c_new_master_bus` */
-} example_sensor_handle_t;
-
-/**
  * @brief Configuration of SCCB interface and sensor
  */
 typedef struct {
@@ -45,10 +36,8 @@ void sensor_init(example_sensor_config_t  *sensor_config,
 
 /**
  * @brief SCCB Interface and Sensor Deinit
- *
- * @param[in] out_sensor_handle      Camera sensor handle
  */
-void example_sensor_deinit(example_sensor_handle_t sensor_handle);
+void sensor_deinit(void);
 
 /**
  * @brief Configure the sensor's resolution and FPS

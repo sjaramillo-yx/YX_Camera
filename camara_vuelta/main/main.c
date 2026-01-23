@@ -24,7 +24,8 @@ extern "C" {
 #endif
 
 /* ================ Globals ================ */
-static const char *TAG = "VueltaCAM";
+static const char      *TAG = "VueltaCAM";
+static esp_eth_handle_t eth_handle;
 // Initialization success flags
 static esp_err_t ethman_inited;
 static esp_err_t mqtt_w_inited;
@@ -71,6 +72,16 @@ static void ota_event_handler(void *handler_arg, esp_event_base_t event_base, in
                       "OTAMan couldn't start the OTA update");
     esp_event_post_to(OTA_event_h, OTA_EVENTS, OTA_CTRL_START, NULL, 0, 100);
     break;
+  case OTA_CTRL_DONE:
+    vman_deinit();
+    sdman_umount();
+    mqttworker_stop();
+    mqttworker_deinit();
+    ethman_deinit(eth_handle);
+    otaman_deinit();
+    nvsman_deinit();
+    esp_restart();
+    break;
 
   default:
     break;
@@ -103,7 +114,7 @@ void app_main(void) {
   ESP_LOGI(TAG, "[APP] Firmware version: %s", esp_app_get_description()->version);
 
   // Initialize NVS manager
-  nvsman_begin();
+  nvsman_init();
   ota_record_t *ota_rec = (ota_record_t *)calloc(1, sizeof(ota_record_t));
   ota_rec_retrieved     = nvsman_get_ota_record(ota_rec);
 
@@ -146,7 +157,6 @@ void app_main(void) {
       OTA_event_h, OTA_EVENTS, ESP_EVENT_ANY_ID, ota_event_handler, NULL, NULL));
 
   // Initialize ethernet
-  esp_eth_handle_t eth_handle;
   ethman_inited = ethman_init(&eth_handle);
 
   mqtt_w_inited = mqttworker_init(free_chunk_queue, filled_chunk_queue);
