@@ -6,7 +6,6 @@ cmake_minimum_required(VERSION 3.5)
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(camara_vuelta)
-
 # --- Cert bundle generation (skip until configured) --------------------------
 
 # Prefer menuconfig values, but allow environment variable fallback
@@ -41,3 +40,25 @@ else()
   # No FLASH_IN_PROJECT: won't overwrite on every normal flash
   nvs_create_partition_image(certs "${GEN_CSV}")
 endif()
+
+
+idf_build_get_property(build_dir BUILD_DIR)
+
+# In ESP-IDF, the app binary name is derived from PROJECT_NAME by default
+# (so build output is typically ${build_dir}/${PROJECT_NAME}.bin)
+set(app_bin "${build_dir}/${PROJECT_NAME}.bin")
+
+set(dst_dir "${build_dir}")
+set(dst_bin "${dst_dir}/${PROJECT_VER}.bin")
+
+add_custom_command(
+    OUTPUT "${dst_bin}"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${dst_dir}"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "${app_bin}" "${dst_bin}"
+    COMMAND ${CMAKE_COMMAND} -E echo "Copied: ${app_bin} -> ${dst_bin}"
+    DEPENDS gen_project_binary
+    VERBATIM
+)
+
+# ALL => runs as part of the default build ("idf.py build")
+add_custom_target(copy_app_binary ALL DEPENDS "${dst_bin}")
