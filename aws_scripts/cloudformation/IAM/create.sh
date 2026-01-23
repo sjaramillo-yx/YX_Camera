@@ -469,6 +469,8 @@ ensure_attach_role_policy "yx-deployer-devtest" "${deployer_devtest_policy_arn}"
 # 3b) IoT Core dev/test permissions (CLI + Console)
 iot_devtest_policy_arn="$(ensure_managed_policy "yx-iot-devtest-policy" "${ROOT_DIR}/policies/iot-devtest-policy.json")"
 ensure_attach_role_policy "yx-deployer-devtest" "${iot_devtest_policy_arn}"
+ota_devtest_policy_arn="$(ensure_managed_policy "yx-ota-devtest-policy" "${ROOT_DIR}/policies/ota-devtest-policy.json")"
+ensure_attach_role_policy "yx-deployer-devtest" "${ota_devtest_policy_arn}"
 ddb_devtest_policy_arn="$(ensure_managed_policy "yx-ddb-devtest-policy" "${ROOT_DIR}/policies/ddb-devtest-policy.json")"
 ensure_attach_role_policy "yx-deployer-devtest" "${ddb_devtest_policy_arn}"
 s3_devtest_policy_arn="$(ensure_managed_policy "yx-s3-devtest-policy" "${ROOT_DIR}/policies/s3-devtest-policy.json")"

@@ -216,7 +216,15 @@ Resources:
                 Action:
                   - s3:GetObject
                   - s3:GetObjectVersion
-                Resource: !Sub "arn:aws:s3:::${OtaArtifactsBucketName}/*"
+                Resource: !Sub "arn:aws:s3:::${OtaArtifactsBucketName}/firmware/*/unsigned/*"
+              
+              - Sid: WriteSignedImages
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                Resource: !Sub "arn:aws:s3:::${OtaArtifactsBucketName}/firmware/*/signed/*"
 
               # Allow IoT to validate/access the bucket itself
               - Sid: ReadOtaArtifactsBucket
@@ -226,13 +234,21 @@ Resources:
                   - s3:ListBucket
                   - s3:ListBucketVersions
                 Resource: !Sub "arn:aws:s3:::${OtaArtifactsBucketName}"
+                Condition:
+                   StringLikeIfExists:
+                    s3:prefix:
+                      - ""
+                      - "firmware/*"
+                      - "firmware/unsigned/*"
+                      - "firmware/signed/*"
 
-              - Sid: WriteSignedImages
+              - Sid: S3BucketIntrospection
                 Effect: Allow
                 Action:
-                  - s3:PutObject
-                Resource: !Sub "arn:aws:s3:::${OtaArtifactsBucketName}/SignedImages/*"
-              
+                  - s3:GetBucketLocation
+                  - s3:GetBucketVersioning
+                Resource:
+                  - !Sub "arn:aws:s3:::${OtaArtifactsBucketName}"
 
               - Sid: AllowSelfPassRoleToIot
                 Effect: Allow
