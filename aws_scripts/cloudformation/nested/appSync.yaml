@@ -72,6 +72,18 @@ Resources:
           nextToken: String
         }
 
+        type CameraInfo {
+          thingName: ID!
+          firmwareVersion: String
+          sensorModel: String
+          updatedAt: AWSTimestamp
+        }
+
+        type CameraInfoListPage {
+          items: [CameraInfo!]!
+          nextToken: String
+        }
+
         type Recording {
           thingName: String!
           currentBitrate: Int
@@ -154,6 +166,9 @@ Resources:
           getCamera(thingName: ID!): Camera
           #  Returns cameras ordered by most-recent lastSeen first (via GSI sort key + descending query)
           listCameraStatuses(limit: Int, nextToken: String): CameraListPage!
+          #  Returns camera info
+          listCameraInfo(limit: Int, nextToken: String): CameraInfoListPage!
+
           #  Returns recordings ordered by most-recently updated first
           listRecordings(limit: Int, nextToken: String): RecordingsList!
           #  Returns recordings for a particular camera
@@ -455,6 +470,63 @@ Resources:
               sdPresent: it.sdPresent,
               sdSizeMB: it.sdSizeMB,
               sdFreeMB: it.sdFreeMB
+            };
+          });
+
+          return { items: mapped, nextToken };
+        }
+
+  ListCameraInfoResolver:
+    Type: AWS::AppSync::Resolver
+    DependsOn:
+      - GraphQLSchema
+      - CameraTableDataSource
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      TypeName: Query
+      FieldName: listCameraInfo
+      Kind: UNIT
+      DataSourceName: !GetAtt CameraTableDataSource.Name
+      Runtime:
+        Name: APPSYNC_JS
+        RuntimeVersion: "1.0.0"
+      Code: |
+        import { util } from "@aws-appsync/utils";
+
+        export function request(ctx) {
+          const args = ctx.args ?? ctx.arguments ?? {};
+          const limit = args.limit ?? 50;
+          const nextToken = args.nextToken;
+
+          return {
+            operation: "Query",
+            index: "camera-info-by-updated-at",
+            query: {
+              expression: "#pk = :pk",
+              expressionNames: { "#pk": "cameraInfoByUpdatedAtPk" },
+              expressionValues: util.dynamodb.toMapValues({ ":pk": "CameraInfo#ALL" }),
+            },
+            limit,
+            nextToken,
+            scanIndexForward: false, // newest info first
+          };
+        }
+
+        export function response(ctx) {
+          const { items = [], nextToken = null } = ctx.result ?? {};
+
+          const mapped = items.map((it) => {
+            // Prefer explicit thingName (if stored); otherwise derive from PK ("Camera#<thingName>")
+            let thingName = it.thingName;
+            if (!thingName && typeof it.PK === "string" && it.PK.startsWith("Camera#")) {
+              thingName = it.PK.slice("Camera#".length);
+            }
+
+            return {
+              thingName,
+              firmwareVersion: it.firmwareVersion,
+              sensorModel: it.sensorModel,
+              updatedAt: it.updatedAt,
             };
           });
 

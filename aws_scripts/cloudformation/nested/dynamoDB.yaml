@@ -23,6 +23,8 @@ Resources:
         - { AttributeName: ongoingRecordingsSk, AttributeType: S }
         - { AttributeName: camerasByLastSeenPk, AttributeType: S }
         - { AttributeName: camerasByLastSeenSk, AttributeType: S }
+        - { AttributeName: cameraInfoByUpdatedAtPk, AttributeType: S }
+        - { AttributeName: cameraInfoByUpdatedAtSk, AttributeType: S }
       KeySchema:
         - { AttributeName: PK, KeyType: HASH }
         - { AttributeName: SK, KeyType: RANGE }
@@ -42,6 +44,11 @@ Resources:
           KeySchema:
             - { AttributeName: camerasByLastSeenPk, KeyType: HASH }
             - { AttributeName: camerasByLastSeenSk, KeyType: RANGE }
+        - IndexName: camera-info-by-updated-at
+          Projection: { ProjectionType: ALL }
+          KeySchema:
+            - { AttributeName: cameraInfoByUpdatedAtPk, KeyType: HASH }
+            - { AttributeName: cameraInfoByUpdatedAtSk, KeyType: RANGE }
   
   # IAM role for IoT Rules
   IoTRuleDynamoRole:

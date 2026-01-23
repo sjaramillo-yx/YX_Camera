@@ -20,8 +20,10 @@
         "dynamodb:Scan"
       ],
       "Resource": [
-        "arn:aws:dynamodb:${REGION}:${ACCOUNT_ID}:table/*-cam-data-*",
-        "arn:aws:dynamodb:${REGION}:${ACCOUNT_ID}:table/*-cam-data-*/index/*"
+        "arn:aws:dynamodb:${REGION}:${ACCOUNT_ID}:table/${STACK_BASE}-cam-data-dev",
+        "arn:aws:dynamodb:${REGION}:${ACCOUNT_ID}:table/${STACK_BASE}-cam-data-test",
+        "arn:aws:dynamodb:${REGION}:${ACCOUNT_ID}:table/${STACK_BASE}-cam-data-dev/index/*",
+        "arn:aws:dynamodb:${REGION}:${ACCOUNT_ID}:table/${STACK_BASE}-cam-data-test/index/*"
       ]
     }
   ]
