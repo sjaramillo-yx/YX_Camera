@@ -41,7 +41,22 @@ else()
   nvs_create_partition_image(certs "${GEN_CSV}")
 endif()
 
+# --- Patch the OV5647  --------------------------
+set(OV5647_REGS  "${CMAKE_SOURCE_DIR}/managed_components/espressif__esp_cam_sensor/sensors/ov5647/private_include/ov5647_settings.h")
 
+file(READ "${OV5647_REGS}" txt)
+
+string(REGEX REPLACE
+  "\\{0x4837, *\\(1000000000 */ *\\((OV5647_IDI_CLOCK_RATE_[A-Za-z0-9x_]+_50FPS) */ *4\\)\\)\\},"
+  "{0x4837, (1000000000 / \\1) * 2},"
+  txt
+  "${txt}"
+)
+
+file(WRITE "${OV5647_REGS}" "${txt}")
+
+
+# --- Copy the output binary with the version as filename --------------------------
 idf_build_get_property(build_dir BUILD_DIR)
 
 # In ESP-IDF, the app binary name is derived from PROJECT_NAME by default
