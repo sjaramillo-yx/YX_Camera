@@ -3,6 +3,7 @@
 #include "esp_private/esp_cache_private.h"
 #include "sensor_init.h"
 #include <esp_cache.h>
+#include <string.h>
 #include <unistd.h>
 
 static const char *TAG = "Video Manager" /**< Logging tag for this module. */;
@@ -206,6 +207,30 @@ static bool IRAM_ATTR on_trans_finished(esp_cam_ctlr_handle_t h, esp_cam_ctlr_tr
 
 static esp_cam_ctlr_evt_cbs_t cbs = {.on_trans_finished = on_trans_finished};
 
+static void update_sensor_color_config(const esp_cam_sensor_device_t *dev) {
+  const char *format_name = dev && dev->cur_format ? dev->cur_format->name : NULL;
+  bool        is_raw8     = format_name && strstr(format_name, "RAW8");
+  bool        is_raw10    = format_name && strstr(format_name, "RAW10");
+
+  if (is_raw8) {
+    csi_cfg.input_data_color_type  = CAM_CTLR_COLOR_RAW8;
+    isp_config.input_data_color_type = ISP_COLOR_RAW8;
+    ESP_LOGI(TAG, "Configured sensor format %s as RAW8 input", format_name);
+    return;
+  }
+
+  if (is_raw10 || format_name) {
+    csi_cfg.input_data_color_type  = CAM_CTLR_COLOR_RAW10;
+    isp_config.input_data_color_type = ISP_COLOR_RAW10;
+    ESP_LOGI(TAG, "Configured sensor format %s as RAW10 input", format_name ? format_name : "n/a");
+    return;
+  }
+
+  ESP_LOGW(TAG, "Unknown sensor format, defaulting to RAW10 input");
+  csi_cfg.input_data_color_type  = CAM_CTLR_COLOR_RAW10;
+  isp_config.input_data_color_type = ISP_COLOR_RAW10;
+}
+
 /*================== Statics ==================*/
 // Returns:
 //   SIZE_MAX = "drop this whole buffer" (not ready)
@@ -330,6 +355,7 @@ static esp_err_t vman_configure_resolution(uint16_t hres, uint16_t vres, uint16_
   // Attempt to set the sensor format
   ESP_GOTO_ON_ERROR(set_sensor_format(hres, vres, &sensor_fps, s_cam_dev), fail, TAG,
                     "Failed to configure sensor format");
+  update_sensor_color_config(s_cam_dev);
   uint16_t output_fps = fps ? fps : sensor_fps;
   if (output_fps == 0) {
     output_fps = sensor_fps ? sensor_fps : DEFAULT_FPS;
