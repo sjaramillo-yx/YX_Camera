@@ -222,7 +222,8 @@ cleanup:
   return err;
 }
 
-esp_err_t nvsman_begin(void) {
+/*================== Initalize, Begin, Stop and Deinitialize ==================*/
+esp_err_t nvsman_init(void) {
   // Initialize NVS
   esp_err_t err = nvs_flash_init();
   if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -248,4 +249,11 @@ esp_err_t nvsman_begin(void) {
   }
 
   return err;
+}
+
+esp_err_t nvsman_deinit(void) {
+  nvs_flash_deinit_partition("certs");
+  nvs_flash_deinit();
+
+  return ESP_OK;
 }

@@ -3,6 +3,7 @@
 #include "esp_private/esp_cache_private.h"
 #include "sensor_init.h"
 #include <esp_cache.h>
+#include <string.h>
 #include <unistd.h>
 
 static const char *TAG = "Video Manager" /**< Logging tag for this module. */;
@@ -157,6 +158,9 @@ static esp_h264_enc_cfg_hw_t enc_cfg = {
     .pic_type = H264_FORMAT,
 };
 
+// MIPI LDO
+esp_ldo_channel_handle_t ldo_mipi_phy = NULL;
+
 // DMA copy handle
 async_memcpy_handle_t driver = NULL;
 
@@ -168,10 +172,11 @@ bool initialized = false;
 bool recording   = false;
 
 // Recording events
-static recording_conf_t        rec_conf;
-static recording_error_t       rec_error;
-static recording_file_t        rec_file;
-static esp_event_loop_handle_t rec_event_h;
+static recording_conf_t             rec_conf;
+static recording_error_t            rec_error;
+static recording_file_t             rec_file;
+static esp_event_loop_handle_t      rec_event_h;
+static esp_event_handler_instance_t rec_handler_h;
 
 // Recording statistics
 static int      current_fps     = 0;
@@ -201,6 +206,30 @@ static bool IRAM_ATTR on_trans_finished(esp_cam_ctlr_handle_t h, esp_cam_ctlr_tr
 }
 
 static esp_cam_ctlr_evt_cbs_t cbs = {.on_trans_finished = on_trans_finished};
+
+static void update_sensor_color_config(const esp_cam_sensor_device_t *dev) {
+  const char *format_name = dev && dev->cur_format ? dev->cur_format->name : NULL;
+  bool        is_raw8     = format_name && strstr(format_name, "RAW8");
+  bool        is_raw10    = format_name && strstr(format_name, "RAW10");
+
+  if (is_raw8) {
+    csi_cfg.input_data_color_type  = CAM_CTLR_COLOR_RAW8;
+    isp_config.input_data_color_type = ISP_COLOR_RAW8;
+    ESP_LOGI(TAG, "Configured sensor format %s as RAW8 input", format_name);
+    return;
+  }
+
+  if (is_raw10 || format_name) {
+    csi_cfg.input_data_color_type  = CAM_CTLR_COLOR_RAW10;
+    isp_config.input_data_color_type = ISP_COLOR_RAW10;
+    ESP_LOGI(TAG, "Configured sensor format %s as RAW10 input", format_name ? format_name : "n/a");
+    return;
+  }
+
+  ESP_LOGW(TAG, "Unknown sensor format, defaulting to RAW10 input");
+  csi_cfg.input_data_color_type  = CAM_CTLR_COLOR_RAW10;
+  isp_config.input_data_color_type = ISP_COLOR_RAW10;
+}
 
 /*================== Statics ==================*/
 // Returns:
@@ -326,6 +355,7 @@ static esp_err_t vman_configure_resolution(uint16_t hres, uint16_t vres, uint16_
   // Attempt to set the sensor format
   ESP_GOTO_ON_ERROR(set_sensor_format(hres, vres, &sensor_fps, s_cam_dev), fail, TAG,
                     "Failed to configure sensor format");
+  update_sensor_color_config(s_cam_dev);
   uint16_t output_fps = fps ? fps : sensor_fps;
   if (output_fps == 0) {
     output_fps = sensor_fps ? sensor_fps : DEFAULT_FPS;
@@ -783,54 +813,6 @@ static void vman_rec_handler(void *handler_arg, esp_event_base_t event_base, int
 }
 
 /*================== Public Functions ==================*/
-
-esp_err_t vman_init(void) {
-  esp_err_t ret = ESP_OK;
-  // Initialize the buffers and queues
-  /// TODO: Change function names
-  ESP_LOGI(TAG, "Initializing buffers and queues.");
-  allocate_pools();
-  create_queues();
-
-  // Create the async DMA copy engine
-  /// TODO: Handle errors instead of aborting
-  async_memcpy_config_t config = ASYNC_MEMCPY_DEFAULT_CONFIG();
-  ESP_RETURN_ON_ERROR(esp_async_memcpy_install_gdma_axi(&config, &driver), TAG,
-                      "Couldn't install async DMA copy engine");
-
-  // Create the MIPI LDO to set the bus voltage
-  esp_ldo_channel_handle_t ldo_mipi_phy        = NULL;
-  esp_ldo_channel_config_t ldo_mipi_phy_config = {
-      .chan_id    = LDO_UNIT_3,
-      .voltage_mv = 2500,
-  };
-  ESP_RETURN_ON_ERROR(esp_ldo_acquire_channel(&ldo_mipi_phy_config, &ldo_mipi_phy), TAG,
-                      "Couldn't adquire LDO channel");
-
-  //--------Camera Sensor and SCCB Init-----------//
-  sensor_init(&cam_sensor_config, &s_cam_dev);
-
-  // Configure the pipeline
-  ESP_RETURN_ON_ERROR(vman_configure_resolution(s_hres, s_vres, s_output_fps), TAG,
-                      "Couldn't configure the VideoManager pipeline");
-
-  //---------------FreeRTOS Tasks------------------//
-  xTaskCreatePinnedToCore(write_to_sd_task, "vman.write.loop", 4096, NULL, 8, &write_task, 0);
-  xTaskCreatePinnedToCore(capture_encode_task, "vman.capture.loop", 6144, NULL, 5, &capture, 1);
-
-  //---------------Recording event loop------------------//
-  ESP_RETURN_ON_ERROR(rec_eventloop_get_handle(&rec_event_h), TAG,
-                      "Couldn't obtain recording eventloop handle");
-  ESP_RETURN_ON_ERROR(esp_event_handler_instance_register_with(rec_event_h, RECORDING_EVENTS,
-                                                               ESP_EVENT_ANY_ID, vman_rec_handler,
-                                                               NULL, NULL),
-                      TAG, "Couldn't register event handler instance");
-  // Done
-  initialized = true;
-
-  return ret;
-}
-
 esp_err_t vman_start_recording(char *filename) {
   esp_err_t ret          = ESP_OK;
   char      err_str[128] = "";
@@ -1036,4 +1018,93 @@ esp_err_t vman_get_rec_json(cJSON **vman_rec_json) {
 
 end:
   return ret;
+}
+
+/*================== Initalize, Begin, Stop and Deinitialize ==================*/
+esp_err_t vman_init(void) {
+  esp_err_t ret = ESP_OK;
+  // Initialize the buffers and queues
+  /// TODO: Change function names
+  ESP_LOGI(TAG, "Initializing buffers and queues.");
+  allocate_pools();
+  create_queues();
+
+  //--------Async DMA copy engine-----------//
+  async_memcpy_config_t config = ASYNC_MEMCPY_DEFAULT_CONFIG();
+  ESP_RETURN_ON_ERROR(esp_async_memcpy_install_gdma_axi(&config, &driver), TAG,
+                      "Couldn't install async DMA copy engine");
+
+  //--------MIPI LDO-----------//
+  esp_ldo_channel_config_t ldo_mipi_phy_config = {
+      .chan_id    = LDO_UNIT_3,
+      .voltage_mv = 2500,
+  };
+  ESP_RETURN_ON_ERROR(esp_ldo_acquire_channel(&ldo_mipi_phy_config, &ldo_mipi_phy), TAG,
+                      "Couldn't adquire LDO channel");
+
+  //--------Camera Sensor and SCCB Init-----------//
+  sensor_init(&cam_sensor_config, &s_cam_dev);
+
+  // Configure the pipeline
+  ESP_RETURN_ON_ERROR(vman_configure_resolution(s_hres, s_vres, s_output_fps), TAG,
+                      "Couldn't configure the VideoManager pipeline");
+
+  //---------------FreeRTOS Tasks------------------//
+  xTaskCreatePinnedToCore(write_to_sd_task, "vman.write.loop", 4096, NULL, 8, &write_task, 0);
+  xTaskCreatePinnedToCore(capture_encode_task, "vman.capture.loop", 6144, NULL, 5, &capture, 1);
+
+  //---------------Recording event loop------------------//
+  ESP_RETURN_ON_ERROR(rec_eventloop_get_handle(&rec_event_h), TAG,
+                      "Couldn't obtain recording eventloop handle");
+  ESP_RETURN_ON_ERROR(esp_event_handler_instance_register_with(rec_event_h, RECORDING_EVENTS,
+                                                               ESP_EVENT_ANY_ID, vman_rec_handler,
+                                                               NULL, &rec_handler_h),
+                      TAG, "Couldn't register recording event handler instance");
+  // Done
+  initialized = true;
+
+  return ret;
+}
+
+esp_err_t vman_deinit(void) {
+  //---------------Recording event loop------------------//
+  ESP_RETURN_ON_ERROR(esp_event_handler_instance_unregister_with(rec_event_h, RECORDING_EVENTS,
+                                                                 ESP_EVENT_ANY_ID, rec_handler_h),
+                      TAG, "Couldn't unregister recording event handler instance");
+
+  //---------------FreeRTOS Tasks------------------//
+  vTaskDelete(capture);
+  vTaskDelete(write_task);
+
+  //--------Camera Sensor and SCCB Init-----------//
+  sensor_deinit();
+
+  //--------MIPI LDO-----------//
+  ESP_RETURN_ON_ERROR(esp_ldo_release_channel(ldo_mipi_phy), TAG,
+                      "Couldn't release MIPI LDO Channel");
+  ldo_mipi_phy = NULL;
+
+  //--------Async DMA copy engine-----------//
+  ESP_RETURN_ON_ERROR(esp_async_memcpy_uninstall(driver), TAG,
+                      "Couldn't unintstall async DMA copy engine");
+
+  //--------Queues and buffers-----------//
+  vQueueDelete(s_filled_encoded_q);
+  vQueueDelete(s_free_encoded_q);
+  vQueueDelete(s_filled_frame_q);
+  vQueueDelete(s_free_frame_q);
+  vQueueDelete(s_filled_stage_q);
+  for (int i = 0; i < FRAME_BUF_COUNT; ++i) {
+    if (s_frame_bufs[i])
+      heap_caps_free(s_frame_bufs[i]);
+  }
+  for (int i = 0; i < ENC_BUF_COUNT; ++i) {
+    if (s_enc_bufs[i].raw_data.buffer)
+      heap_caps_free(s_enc_bufs[i].raw_data.buffer);
+  }
+
+  // Done
+  initialized = false;
+
+  return ESP_OK;
 }

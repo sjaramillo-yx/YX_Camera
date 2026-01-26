@@ -24,7 +24,8 @@ extern "C" {
 #endif
 
 /* ================ Globals ================ */
-static const char *TAG = "VueltaCAM";
+static const char      *TAG = "VueltaCAM";
+static esp_eth_handle_t eth_handle;
 // Initialization success flags
 static esp_err_t ethman_inited;
 static esp_err_t mqtt_w_inited;
@@ -71,6 +72,16 @@ static void ota_event_handler(void *handler_arg, esp_event_base_t event_base, in
                       "OTAMan couldn't start the OTA update");
     esp_event_post_to(OTA_event_h, OTA_EVENTS, OTA_CTRL_START, NULL, 0, 100);
     break;
+  case OTA_CTRL_DONE:
+    vman_deinit();
+    sdman_umount();
+    mqttworker_stop();
+    mqttworker_deinit();
+    ethman_deinit(eth_handle);
+    otaman_deinit();
+    nvsman_deinit();
+    esp_restart();
+    break;
 
   default:
     break;
@@ -103,7 +114,7 @@ void app_main(void) {
   ESP_LOGI(TAG, "[APP] Firmware version: %s", esp_app_get_description()->version);
 
   // Initialize NVS manager
-  nvsman_begin();
+  nvsman_init();
   ota_record_t *ota_rec = (ota_record_t *)calloc(1, sizeof(ota_record_t));
   ota_rec_retrieved     = nvsman_get_ota_record(ota_rec);
 
@@ -146,7 +157,6 @@ void app_main(void) {
       OTA_event_h, OTA_EVENTS, ESP_EVENT_ANY_ID, ota_event_handler, NULL, NULL));
 
   // Initialize ethernet
-  esp_eth_handle_t eth_handle;
   ethman_inited = ethman_init(&eth_handle);
 
   mqtt_w_inited = mqttworker_init(free_chunk_queue, filled_chunk_queue);
@@ -159,24 +169,6 @@ void app_main(void) {
   // Test the OTA partition
   // ota_test_boot_ota0_once();
   esp_err_t part_test = otaman_run_test(dummy_test, ota_rec);
-
-  // Connect to AWS
-  if (ethman_wait_ip(1000) == ESP_OK)
-    ethman_wait_sntp(10000);
-  if (mqtt_w_inited == ESP_OK) {
-    if ((err = mqttworker_begin(10000)) != ESP_OK)
-      ESP_LOGE(TAG, "MQTT Worker couldn't begin: %s (0x%02x)", esp_err_to_name(err), err);
-  } else
-    ESP_LOGW(TAG, "The MQTT worker couldn't be initialized. No connection will be attempted");
-
-  // Get information about the SD Card
-  cJSON *sdJSON;
-  sdman_getJSON(&sdJSON);
-  /// Get information about the Video Manager
-  cJSON *vmanJSON;
-  vman_getJSON(&vmanJSON);
-  // Publish initial state
-  hello_published = mqttworker_publish_initial_state(sdJSON, vmanJSON);  // Also frees cJSON memory
 
   ota_result_t ota_res = {.err_code = ota_rec->esp_err};
   strlcpy(ota_res.job_id, ota_rec->job_id, sizeof(ota_res.job_id));
@@ -196,7 +188,24 @@ void app_main(void) {
                       portMAX_DELAY);
   }
 
-  mqttworker_check_for_jobs();
+  // Connect to AWS
+  if (ethman_wait_ip(1000) == ESP_OK)
+    ethman_wait_sntp(10000);
+  if (mqtt_w_inited == ESP_OK) {
+    if ((err = mqttworker_begin(10000)) != ESP_OK)
+      ESP_LOGE(TAG, "MQTT Worker couldn't begin: %s (0x%02x)", esp_err_to_name(err), err);
+  } else
+    ESP_LOGW(TAG, "The MQTT worker couldn't be initialized. No connection will be attempted");
+
+  // Get information about the SD Card
+  cJSON *sdJSON;
+  sdman_getJSON(&sdJSON);
+  /// Get information about the Video Manager
+  cJSON *vmanJSON;
+  vman_getJSON(&vmanJSON);
+  // Publish initial state
+  hello_published = mqttworker_publish_initial_state(sdJSON, vmanJSON);  // Also frees cJSON memory
+
   while (true) {
     vTaskDelay(pdMS_TO_TICKS(30000));
     sdman_getJSON(&sdJSON);

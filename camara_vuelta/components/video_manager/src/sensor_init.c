@@ -13,6 +13,13 @@
 
 static const char *TAG = "sensor_init";
 
+static i2c_master_bus_handle_t i2c_bus_handle;
+static esp_cam_sensor_config_t cam_config = {
+    .reset_pin = -1,
+    .pwdn_pin  = -1,
+    .xclk_pin  = -1,
+};
+
 void sensor_init(example_sensor_config_t  *sensor_config,
                  esp_cam_sensor_device_t **out_sensor_device) {
   esp_err_t ret = ESP_FAIL;
@@ -25,16 +32,10 @@ void sensor_init(example_sensor_config_t  *sensor_config,
       .i2c_port                     = sensor_config->i2c_port_num,
       .flags.enable_internal_pullup = true,
   };
-  i2c_master_bus_handle_t i2c_bus_handle = NULL;
+  i2c_bus_handle = NULL;
   ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_bus_conf, &i2c_bus_handle));
 
   //---------------SCCB Init------------------//
-  esp_cam_sensor_config_t cam_config = {
-      .reset_pin = -1,
-      .pwdn_pin  = -1,
-      .xclk_pin  = -1,
-  };
-
   esp_cam_sensor_device_t *cam = NULL;
   for (esp_cam_sensor_detect_fn_t *p = &__esp_cam_sensor_detect_fn_array_start;
        p < &__esp_cam_sensor_detect_fn_array_end; ++p) {
@@ -94,9 +95,9 @@ void sensor_init(example_sensor_config_t  *sensor_config,
   *out_sensor_device = cam;
 }
 
-void example_sensor_deinit(example_sensor_handle_t sensor_handle) {
-  ESP_ERROR_CHECK(esp_sccb_del_i2c_io(sensor_handle.sccb_handle));
-  ESP_ERROR_CHECK(i2c_del_master_bus(sensor_handle.i2c_bus_handle));
+void sensor_deinit(void) {
+  ESP_ERROR_CHECK(esp_sccb_del_i2c_io(cam_config.sccb_handle));
+  ESP_ERROR_CHECK(i2c_del_master_bus(i2c_bus_handle));
 }
 
 esp_err_t set_sensor_format(uint16_t hres, uint16_t vres, uint16_t *fps,

@@ -36,7 +36,7 @@ extern "C" {
 /**
  * @brief Initialize the Ethernet driver.
  *
- * @param[out] eth_handle
+ * @param[out] eth_handle_out A pointer to an `esp_eth_handle_t` where the handle should be stored.
  *
  * @return
  *          - `ESP_OK` on success
@@ -45,6 +45,13 @@ extern "C" {
  *          - `ESP_FAIL` on any other failure
  */
 esp_err_t ethman_init(esp_eth_handle_t *eth_handle_out);
+
+/**
+ * @brief Deinitialize the Ethernet driver
+ *
+ * @param eth_handle An `esp_eth_handle_t` handle to deinitialize.
+ */
+esp_err_t ethman_deinit(esp_eth_handle_t eth_handle);
 
 /**
  * @brief Wait for the "Got IP" event.

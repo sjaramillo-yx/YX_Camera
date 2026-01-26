@@ -71,6 +71,11 @@ esp_err_t otaman_start_update(uint32_t image_size);
  */
 esp_err_t otaman_init(QueueHandle_t *free_chunk_queue, QueueHandle_t *filled_chunk_queue);
 
+/**
+ * @brief Deinitialize the OTA Manager
+ */
+esp_err_t otaman_deinit(void);
+
 #ifdef __cplusplus
 }
 #endif

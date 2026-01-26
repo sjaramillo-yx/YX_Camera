@@ -41,6 +41,16 @@ esp_err_t mqttworker_init(QueueHandle_t free_chunk_queue, QueueHandle_t filled_c
 esp_err_t mqttworker_begin(int timeout_ms);
 
 /**
+ * @brief Stop the MQTT worker.
+ */
+esp_err_t mqttworker_stop(void);
+
+/**
+ * @brief Deinitialize the worker.
+ */
+esp_err_t mqttworker_deinit(void);
+
+/**
  * @brief Publish initial state information to AWS
  */
 esp_err_t mqttworker_publish_initial_state(cJSON *sdJSON, cJSON *vmanJSON);

@@ -66,6 +66,11 @@ typedef struct {
 esp_err_t s3uploader_init(esp_mqtt_client_handle_t mqtt_client, const s3uploader_cfg_t *cfg);
 
 /**
+ * @brief Deinitialize the S3 uploader.
+ */
+esp_err_t s3uploader_deinit(void);
+
+/**
  * @brief Handle incoming MQTT messages for the S3 Uploader.
  *
  * @param topic The topic where the message was received, null terminated.

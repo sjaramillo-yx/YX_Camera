@@ -45,9 +45,14 @@ typedef struct ota_record_t {
 } ota_record_t;
 
 /**
- * @brief Initialize the NVS partition
+ * @brief Initialize the NVS Manager
  */
-esp_err_t nvsman_begin(void);
+esp_err_t nvsman_init(void);
+
+/**
+ * @brief Deinitialize the NVS Manager
+ */
+esp_err_t nvsman_deinit(void);
 
 /**
  * @brief Save certificate data to the NVS partition

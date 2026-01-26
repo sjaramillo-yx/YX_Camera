@@ -54,8 +54,12 @@ static esp_mqtt_client_config_t mqtt_cfg = {
  */
 static SemaphoreHandle_t mqtt_conn_semphr = NULL;
 
-/// NOTE: This starts as `true` here so it can be controlled by the main task
-static bool jobs_checked = true;
+/**
+ * @brief The recording events handler
+ */
+esp_event_handler_instance_t rec_handler_h;
+
+static bool jobs_checked = false;
 
 /*================== Event Handlers ==================*/
 /**
@@ -85,8 +89,10 @@ static void mqtt_connected_handler(void *handler_args, esp_event_base_t base, in
   // Connect the S3 uploader
   s3_uploader_on_connected();
   // Check for Jobs (only once)
-  if (!jobs_checked)
+  if (!jobs_checked) {
     jobs_get_pending(mqtt_cert_data.thing_name, "getJobs");
+    jobs_checked = true;
+  }
   // Give the connected semaphore
   xSemaphoreGive(mqtt_conn_semphr);
 }
@@ -325,72 +331,6 @@ static esp_err_t mqttworker_verify_flash_certs(void) {
   */
 
 /*================== Public Functions ==================*/
-esp_err_t mqttworker_init(QueueHandle_t free_chunk_queue, QueueHandle_t filled_chunk_queue) {
-  esp_err_t err;
-  /* Create the connected semaphore */
-  mqtt_conn_semphr = xSemaphoreCreateBinary();
-
-  /* Check if certificates are in NVS */
-  ESP_RETURN_ON_ERROR(nvsman_get_certs(&mqtt_cert_data), TAG, "Couldn't get certificates from NVS");
-  // Configure the MQTT client
-  mqtt_cfg.credentials.authentication.certificate = (const char *)mqtt_cert_data.client_crt;
-  mqtt_cfg.credentials.authentication.key         = (const char *)mqtt_cert_data.client_key;
-  mqtt_cfg.broker.verification.certificate        = (const char *)mqtt_cert_data.root_ca;
-  if (!strcmp(mqtt_cert_data.cert_id, "provisioning")) {
-    // This means the provisioning certs will be used
-    // Initialize the client for the provision claimer
-    if (client != NULL)
-      esp_mqtt_set_config(client, &mqtt_cfg);
-    else
-      client = esp_mqtt_client_init(&mqtt_cfg);
-    ESP_LOGI(TAG, "Entering provisioning flow");
-    err = provision_begin(client, &mqtt_cert_data);
-  }
-  /// TODO: Catch other errors
-  err = nvsman_get_certs(&mqtt_cert_data);
-  ESP_LOGD(TAG, "ThingName is %s", mqtt_cert_data.thing_name);
-  mqtt_cfg.credentials.client_id = (const char *)mqtt_cert_data.thing_name;
-  client                         = esp_mqtt_client_init(&mqtt_cfg);
-
-  /* Register the event handlers */
-  esp_mqtt_client_register_event(client, MQTT_EVENT_CONNECTED, mqtt_connected_handler, NULL);
-  esp_mqtt_client_register_event(client, MQTT_EVENT_DATA, mqtt_data_handler, NULL);
-  /* Get the event loop handles */
-  /// TODO:  Check for errors
-  rec_eventloop_get_handle(&rec_event_h);
-  ESP_RETURN_ON_ERROR(esp_event_handler_instance_register_with(rec_event_h, RECORDING_EVENTS,
-                                                               ESP_EVENT_ANY_ID,
-                                                               mqttworker_rec_handler, NULL, NULL),
-                      TAG, "Couldn't register recording events handler");
-  /* Initialize the jobs manager */
-  ESP_RETURN_ON_ERROR(jobs_init(client, free_chunk_queue, filled_chunk_queue), TAG,
-                      "Couldn't initialize the jobs manager");
-  /* Initialize the uploader */
-  s3uploader_cfg_t up_cfg = {
-      .thing_name       = mqtt_cert_data.thing_name,
-      .rec_dir          = "videos",
-      .http_timeout_ms  = 20000,
-      .http_put_retries = 3,
-  };
-  ESP_RETURN_ON_ERROR(s3uploader_init(client, &up_cfg), TAG,
-                      "Couldn't initialize the S3 uploader component");
-
-  return err;
-}
-
-esp_err_t mqttworker_begin(int timeout_ms) {
-  esp_err_t ret = ESP_OK;
-  /* Start MQTT event loop */
-  ESP_LOGI(TAG, "Connecting to endpoint: %s", CONFIG_AWS_ENDPOINT);
-  ESP_RETURN_ON_ERROR(esp_mqtt_client_start(client), TAG, "Couldn't start the MQTT client");
-  /* Wait for the client to stablish a connection */
-  ret = xSemaphoreTake(mqtt_conn_semphr,
-                       timeout_ms > 0 ? pdMS_TO_TICKS(timeout_ms) : portMAX_DELAY) == pdTRUE
-            ? ESP_OK
-            : ESP_ERR_TIMEOUT;
-  return ret;
-}
-
 esp_err_t mqttworker_publish_initial_state(cJSON *sdJSON, cJSON *vmanJSON) {
   esp_err_t      ret     = ESP_OK;
   cJSON         *payload = cJSON_CreateObject();
@@ -479,6 +419,96 @@ esp_err_t mqttworker_get_thingname(char thing_name[128]) {
 esp_err_t mqttworker_check_for_jobs() {
   // Ask for pending jobs
   ESP_LOGD(TAG, "Getting pending jobs for %s", mqtt_cert_data.thing_name);
-  jobs_checked = false;
+  jobs_get_pending(mqtt_cert_data.thing_name, "getJobs");
+  jobs_checked = true;
+  return ESP_OK;
+}
+
+/*================== Initalize, Begin, Stop and Deinitialize ==================*/
+esp_err_t mqttworker_init(QueueHandle_t free_chunk_queue, QueueHandle_t filled_chunk_queue) {
+  esp_err_t err;
+  /* Create the connected semaphore */
+  mqtt_conn_semphr = xSemaphoreCreateBinary();
+
+  /* Check if certificates are in NVS */
+  ESP_RETURN_ON_ERROR(nvsman_get_certs(&mqtt_cert_data), TAG, "Couldn't get certificates from NVS");
+  // Configure the MQTT client
+  mqtt_cfg.credentials.authentication.certificate = (const char *)mqtt_cert_data.client_crt;
+  mqtt_cfg.credentials.authentication.key         = (const char *)mqtt_cert_data.client_key;
+  mqtt_cfg.broker.verification.certificate        = (const char *)mqtt_cert_data.root_ca;
+  if (!strcmp(mqtt_cert_data.cert_id, "provisioning")) {
+    // This means the provisioning certs will be used
+    // Initialize the client for the provision claimer
+    if (client != NULL)
+      esp_mqtt_set_config(client, &mqtt_cfg);
+    else
+      client = esp_mqtt_client_init(&mqtt_cfg);
+    ESP_LOGI(TAG, "Entering provisioning flow");
+    err = provision_begin(client, &mqtt_cert_data);
+  }
+  /// TODO: Catch other errors
+  err = nvsman_get_certs(&mqtt_cert_data);
+  ESP_LOGD(TAG, "ThingName is %s", mqtt_cert_data.thing_name);
+  mqtt_cfg.credentials.client_id = (const char *)mqtt_cert_data.thing_name;
+  client                         = esp_mqtt_client_init(&mqtt_cfg);
+
+  /* Register the event handlers */
+  esp_mqtt_client_register_event(client, MQTT_EVENT_CONNECTED, mqtt_connected_handler, NULL);
+  esp_mqtt_client_register_event(client, MQTT_EVENT_DATA, mqtt_data_handler, NULL);
+  /* Get the event loop handles */
+  /// TODO:  Check for errors
+  rec_eventloop_get_handle(&rec_event_h);
+  ESP_RETURN_ON_ERROR(
+      esp_event_handler_instance_register_with(rec_event_h, RECORDING_EVENTS, ESP_EVENT_ANY_ID,
+                                               mqttworker_rec_handler, NULL, &rec_handler_h),
+      TAG, "Couldn't register recording events handler");
+  /* Initialize the jobs manager */
+  ESP_RETURN_ON_ERROR(jobs_init(client, free_chunk_queue, filled_chunk_queue), TAG,
+                      "Couldn't initialize the jobs manager");
+  /* Initialize the uploader */
+  s3uploader_cfg_t up_cfg = {
+      .thing_name       = mqtt_cert_data.thing_name,
+      .rec_dir          = "videos",
+      .http_timeout_ms  = 20000,
+      .http_put_retries = 3,
+  };
+  ESP_RETURN_ON_ERROR(s3uploader_init(client, &up_cfg), TAG,
+                      "Couldn't initialize the S3 uploader component");
+
+  return err;
+}
+
+esp_err_t mqttworker_begin(int timeout_ms) {
+  esp_err_t ret = ESP_OK;
+  /* Start MQTT event loop */
+  ESP_LOGI(TAG, "Connecting to endpoint: %s", CONFIG_AWS_ENDPOINT);
+  ESP_RETURN_ON_ERROR(esp_mqtt_client_start(client), TAG, "Couldn't start the MQTT client");
+  /* Wait for the client to stablish a connection */
+  ret = xSemaphoreTake(mqtt_conn_semphr,
+                       timeout_ms > 0 ? pdMS_TO_TICKS(timeout_ms) : portMAX_DELAY) == pdTRUE
+            ? ESP_OK
+            : ESP_ERR_TIMEOUT;
+  return ret;
+}
+
+esp_err_t mqttworker_stop() {
+  ESP_RETURN_ON_ERROR(esp_mqtt_client_stop(client), TAG, "Couldn't stop the MQTT client");
+  return ESP_OK;
+}
+
+esp_err_t mqttworker_deinit(void) {
+  ESP_RETURN_ON_ERROR(jobs_deinit(), TAG, "Coudln't deinitialize the Jobs Manager");
+  ESP_RETURN_ON_ERROR(s3uploader_deinit(), TAG, "Couldn't deinitialize the S3 Uploader");
+  ESP_RETURN_ON_ERROR(esp_event_handler_instance_unregister_with(rec_event_h, RECORDING_EVENTS,
+                                                                 ESP_EVENT_ANY_ID, rec_handler_h),
+                      TAG, "Couldn't unregister recording events handler");
+  ESP_RETURN_ON_ERROR(esp_mqtt_client_unregister_event(client, MQTT_EVENT_DATA, mqtt_data_handler),
+                      TAG, "Couldn't unregister MQTT data handler");
+  ESP_RETURN_ON_ERROR(
+      esp_mqtt_client_unregister_event(client, MQTT_EVENT_CONNECTED, mqtt_connected_handler), TAG,
+      "Couldn't unregister MQTT connected handler");
+
+  ESP_RETURN_ON_ERROR(esp_mqtt_client_destroy(client), TAG, "Couldn't destroy the MQTT client");
+
   return ESP_OK;
 }

@@ -589,53 +589,6 @@ static bool parse_commands_payload(const char *data, int len, cmd_msg_t *out) {
 }
 
 /*--------------- Public functions ---------------*/
-esp_err_t s3uploader_init(esp_mqtt_client_handle_t mqtt_client, const s3uploader_cfg_t *cfg) {
-  esp_err_t ret = ESP_OK;
-  ESP_RETURN_ON_FALSE(mqtt_client != NULL, ESP_ERR_INVALID_ARG, TAG, "client is NULL");
-  ESP_RETURN_ON_FALSE(cfg != NULL, ESP_ERR_INVALID_ARG, TAG, "cfg is NULL");
-  ESP_RETURN_ON_FALSE(cfg->thing_name && cfg->thing_name[0] != '\0', ESP_ERR_INVALID_ARG, TAG,
-                      "thing_name required");
-  ESP_RETURN_ON_FALSE(cfg->rec_dir && cfg->rec_dir[0] != '\0', ESP_ERR_INVALID_ARG, TAG,
-                      "rec_dir required");
-  /// TODO: Check if SD card is mounted
-
-  // General uploader configuration
-  client = mqtt_client;
-  strlcpy(thing_name, cfg->thing_name, sizeof(thing_name));
-  strlcpy(rec_dir, cfg->rec_dir, sizeof(rec_dir));
-
-  // HTTP configuration
-  http_timeout_ms = (cfg->http_timeout_ms > 0) ? cfg->http_timeout_ms : CONFIG_S3_HTTP_TIMEOUT_MS;
-  http_put_retries =
-      (cfg->http_put_retries > 0) ? cfg->http_put_retries : CONFIG_S3_HTTP_PUT_RETRIES;
-
-  // Build "upload start" MQTT topic
-  snprintf(topic_start, sizeof(topic_start),
-           CONFIG_PROJ_BASE_NAME "/" CONFIG_PROJ_ENV_NAME "/uploads/%s/start", thing_name);
-  ESP_LOGD(TAG, "Built start topic: %s", topic_start);
-
-  // Create the queues
-  start_q = xQueueCreate(4, sizeof(start_msg_t));
-  cmd_q   = xQueueCreate(8, sizeof(cmd_msg_t));
-  ESP_GOTO_ON_FALSE(start_q && cmd_q, ESP_ERR_NO_MEM, cleanup, TAG, "Queue create failed");
-
-  // Create the uploader task
-  BaseType_t ok = xTaskCreate(uploader_task, "s3.uploader", 10240, NULL, 8, &task);
-  ESP_RETURN_ON_FALSE(ok == pdPASS, ESP_FAIL, TAG, "Task create failed");
-
-  // Mark the S3 uploader as initialized
-  initialized    = true;
-  mqtt_connected = false;
-  return ESP_OK;
-
-cleanup:
-  if (start_q)
-    vQueueDelete(start_q);
-  if (cmd_q)
-    vQueueDelete(cmd_q);
-  return ret;
-}
-
 esp_err_t s3_uploader_on_connected(void) {
   ESP_RETURN_ON_FALSE(initialized, ESP_ERR_INVALID_STATE, TAG, "Not initialized");
   ESP_RETURN_ON_FALSE(client != NULL, ESP_ERR_INVALID_STATE, TAG, "MQTT client missing");
@@ -684,3 +637,59 @@ esp_err_t s3_uploader_handler(const char *topic, const char *data, int data_len)
 }
 
 bool s3_uploader_is_busy(void) { return state != ST_IDLE; }
+
+/*================== Initalize, Begin, Stop and Deinitialize ==================*/
+esp_err_t s3uploader_init(esp_mqtt_client_handle_t mqtt_client, const s3uploader_cfg_t *cfg) {
+  esp_err_t ret = ESP_OK;
+  ESP_RETURN_ON_FALSE(mqtt_client != NULL, ESP_ERR_INVALID_ARG, TAG, "client is NULL");
+  ESP_RETURN_ON_FALSE(cfg != NULL, ESP_ERR_INVALID_ARG, TAG, "cfg is NULL");
+  ESP_RETURN_ON_FALSE(cfg->thing_name && cfg->thing_name[0] != '\0', ESP_ERR_INVALID_ARG, TAG,
+                      "thing_name required");
+  ESP_RETURN_ON_FALSE(cfg->rec_dir && cfg->rec_dir[0] != '\0', ESP_ERR_INVALID_ARG, TAG,
+                      "rec_dir required");
+  /// TODO: Check if SD card is mounted
+
+  // General uploader configuration
+  client = mqtt_client;
+  strlcpy(thing_name, cfg->thing_name, sizeof(thing_name));
+  strlcpy(rec_dir, cfg->rec_dir, sizeof(rec_dir));
+
+  // HTTP configuration
+  http_timeout_ms = (cfg->http_timeout_ms > 0) ? cfg->http_timeout_ms : CONFIG_S3_HTTP_TIMEOUT_MS;
+  http_put_retries =
+      (cfg->http_put_retries > 0) ? cfg->http_put_retries : CONFIG_S3_HTTP_PUT_RETRIES;
+
+  // Build "upload start" MQTT topic
+  snprintf(topic_start, sizeof(topic_start),
+           CONFIG_PROJ_BASE_NAME "/" CONFIG_PROJ_ENV_NAME "/uploads/%s/start", thing_name);
+  ESP_LOGD(TAG, "Built start topic: %s", topic_start);
+
+  // Create the queues
+  start_q = xQueueCreate(4, sizeof(start_msg_t));
+  cmd_q   = xQueueCreate(8, sizeof(cmd_msg_t));
+  ESP_GOTO_ON_FALSE(start_q && cmd_q, ESP_ERR_NO_MEM, cleanup, TAG, "Queue create failed");
+
+  // Create the uploader task
+  BaseType_t ok = xTaskCreate(uploader_task, "s3.uploader", 10240, NULL, 8, &task);
+  ESP_RETURN_ON_FALSE(ok == pdPASS, ESP_FAIL, TAG, "Task create failed");
+
+  // Mark the S3 uploader as initialized
+  initialized    = true;
+  mqtt_connected = false;
+  return ESP_OK;
+
+cleanup:
+  if (start_q)
+    vQueueDelete(start_q);
+  if (cmd_q)
+    vQueueDelete(cmd_q);
+  return ret;
+}
+
+esp_err_t s3uploader_deinit(void) {
+  vTaskDelete(task);
+  vQueueDelete(cmd_q);
+  vQueueDelete(start_q);
+
+  return ESP_OK;
+}
