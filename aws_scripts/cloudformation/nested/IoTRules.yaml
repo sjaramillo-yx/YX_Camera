@@ -144,6 +144,9 @@ Resources:
             'CameraInfo#ALL' AS cameraInfoByUpdatedAtPk,
             concat(@updatedAtSortable, '#', thingName) AS cameraInfoByUpdatedAtSk
 
+          FROM '${ParentStackName}/${Environment}/cameras/hello'
+          WHERE thingName = clientid()
+
         Actions:
           - DynamoDBv2:
               RoleArn: !Ref DynamoRoleArn
@@ -227,8 +230,10 @@ Resources:
             'Recs#ALL' AS allRecordingsPk,
             concat(cast(@nowMs as String), '#', @pk, '#', @transaction) AS allRecordingsSk,
           
-            CASE @isStart WHEN true THEN targetBitrate END AS targetBitrate,
-            CASE @isStart WHEN true THEN targetFps     END AS targetFps,
+            CASE @isStart WHEN true THEN targetBitrate      END AS targetBitrate,
+            CASE @isStart WHEN true THEN targetFps          END AS targetFps,
+            CASE @isStart WHEN true THEN get(resolution, 0) END AS hres,
+            CASE @isStart WHEN true THEN get(resolution, 1) END AS vres,
 
             CASE @isOngoing WHEN true THEN 'Recs#ALL'                                                  END AS allRecordingsPk,
             CASE @isOngoing WHEN true THEN concat(cast(@nowMs as String), '#', @pk, '#', @transaction) END AS allRecordingsSk,
