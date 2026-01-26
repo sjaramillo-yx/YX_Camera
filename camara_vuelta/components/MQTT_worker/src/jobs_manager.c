@@ -394,30 +394,25 @@ cleanup:
 }  // end jobs_parse_ota_job
 
 /*================== Event Handlers ==================*/
-static void ota_event_handler(void *handler_arg, esp_event_base_t event_base, int32_t event_id,
+static void ota_job_rejected_handler(void *handler_arg, esp_event_base_t event_base,
+                                     int32_t event_id, void *event_data) {
+  ESP_LOGW(TAG, "OTA Update rejected by OTA Manager, aborting");
+  jobs_update_job_status(ota_stream.job_id, REJECTED, "updateJob", ota_stream.thing_name);
+  /// TODO: Mark the AWS Job as failed and include reason.
+}
+
+static void ota_start_handler(void *handler_arg, esp_event_base_t event_base, int32_t event_id,
                               void *event_data) {
-  ESP_LOGI(TAG, "Received event %s:%d", (char *)event_base, event_id);
-  switch (event_id) {
-  case OTA_JOB_REJECTED:
-    ESP_LOGW(TAG, "OTA Update rejected by OTA Manager, aborting");
-    jobs_update_job_status(ota_stream.job_id, REJECTED, "updateJob", ota_stream.thing_name);
-    /// TODO: Mark the AWS Job as failed and include reason.
-    break;
-  case OTA_CTRL_START:
-    file_describe_stream(mqtt_client, ota_stream.thing_name, "describeStream",
-                         ota_stream.stream_id);
-    break;
-  case OTA_JOB_DONE:
-  case OTA_JOB_ERROR:
-    /// OTA partition has been written and tested.
-    ota_result_t *ota_res = (ota_result_t *)event_data;
-    jobs_update_job_status(ota_res->job_id, (ota_res->err_code == ESP_OK) ? SUCCEEDED : FAILED,
-                           "updateJob", ota_res->thing_name);
-    break;
-  default:
-    break;
-  }
-}  // end ota_event_handler
+  file_describe_stream(mqtt_client, ota_stream.thing_name, "describeStream", ota_stream.stream_id);
+}
+
+static void ota_job_end_handler(void *handler_arg, esp_event_base_t event_base, int32_t event_id,
+                                void *event_data) {
+  /// OTA partition has been written and tested.
+  ota_result_t *ota_res = (ota_result_t *)event_data;
+  jobs_update_job_status(ota_res->job_id, (ota_res->err_code == ESP_OK) ? SUCCEEDED : FAILED,
+                         "updateJob", ota_res->thing_name);
+}
 
 /*================== FreeRTOS Tasks ==================*/
 void download_task(void *arg) {
@@ -773,9 +768,22 @@ esp_err_t jobs_init(esp_mqtt_client_handle_t client, char *codesign_certificate,
   // Get the OTA event loop handles
   OTA_eventloop_get_handle(&OTA_event_h);
   ESP_RETURN_ON_ERROR(esp_event_handler_instance_register_with(OTA_event_h, OTA_EVENTS,
-                                                               ESP_EVENT_ANY_ID, ota_event_handler,
+                                                               OTA_JOB_DONE, ota_job_end_handler,
                                                                NULL, &ota_handler_h),
-                      TAG, "Couldn't register OTA events handler");
+                      TAG, "Couldn't register OTA job done handler");
+  ESP_RETURN_ON_ERROR(esp_event_handler_instance_register_with(OTA_event_h, OTA_EVENTS,
+                                                               OTA_JOB_ERROR, ota_job_end_handler,
+                                                               NULL, &ota_handler_h),
+                      TAG, "Couldn't register OTA job error handler");
+  ESP_RETURN_ON_ERROR(
+      esp_event_handler_instance_register_with(OTA_event_h, OTA_EVENTS, OTA_JOB_REJECTED,
+                                               ota_job_rejected_handler, NULL, &ota_handler_h),
+      TAG, "Couldn't register OTA job rejected handler");
+  ESP_RETURN_ON_ERROR(esp_event_handler_instance_register_with(OTA_event_h, OTA_EVENTS,
+                                                               OTA_CTRL_START, ota_start_handler,
+                                                               NULL, &ota_handler_h),
+                      TAG, "Couldn't register OTA start handler");
+
   // Initialize the buffers and queues
   /// TODO: Change function names
   ESP_LOGI(TAG, "Initializing buffers and queues.");

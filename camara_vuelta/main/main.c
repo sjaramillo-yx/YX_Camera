@@ -55,47 +55,42 @@ static esp_err_t publish_rec_state() {
 }
 
 /*================== Event Handlers ==================*/
-static void ota_event_handler(void *handler_arg, esp_event_base_t event_base, int32_t event_id,
-                              void *event_data) {
+static void ota_job_received_handler(void *handler_arg, esp_event_base_t event_base,
+                                     int32_t event_id, void *event_data) {
   ota_stream_t *ota_stream;
   esp_err_t     ret;
-  ESP_LOGI(TAG, "Received event %s:%d", (char *)event_base, event_id);
-  switch (event_id) {
-  case OTA_JOB_RECEIVED:
-    ota_stream          = event_data;
-    bool vman_recording = vman_is_recording();
-    ESP_LOGD(TAG, "VideoManager is %srecording", vman_recording ? "" : "not ");
-    ESP_GOTO_ON_FALSE(!vman_recording, ESP_ERR_INVALID_STATE, start_failed, TAG,
-                      "Peripherals are busy, can't begin OTA update");
-    /// TODO: Add other checks here before accepting OTA job
-    /// TODO: Check that MQTT is connected
-    ESP_GOTO_ON_ERROR(otaman_can_start(ota_stream->filesize), start_failed, TAG,
-                      "OTAMan can't start");
-    ESP_GOTO_ON_ERROR(otaman_start_update(ota_stream->filesize), start_failed, TAG,
-                      "OTAMan couldn't start the OTA update");
-    esp_event_post_to(OTA_event_h, OTA_EVENTS, OTA_CTRL_START, NULL, 0, 100);
-    break;
-  case OTA_CTRL_DONE:
-    vman_deinit();
-    sdman_umount();
-    mqttworker_stop();
-    mqttworker_deinit();
-    ethman_deinit(eth_handle);
-    otaman_deinit();
-    nvsman_deinit();
-    esp_restart();
-    break;
+  ota_stream          = event_data;
+  bool vman_recording = vman_is_recording();
+  ESP_LOGD(TAG, "VideoManager is %srecording", vman_recording ? "" : "not ");
+  ESP_GOTO_ON_FALSE(!vman_recording, ESP_ERR_INVALID_STATE, start_failed, TAG,
+                    "Peripherals are busy, can't begin OTA update");
+  /// TODO: Add other checks here before accepting OTA job
+  /// TODO: Check that MQTT is connected
+  ESP_GOTO_ON_ERROR(otaman_can_start(ota_stream->filesize), start_failed, TAG,
+                    "OTAMan can't start");
+  ESP_GOTO_ON_ERROR(otaman_start_update(ota_stream->filesize), start_failed, TAG,
+                    "OTAMan couldn't start the OTA update");
+  esp_event_post_to(OTA_event_h, OTA_EVENTS, OTA_CTRL_START, NULL, 0, 100);
+  return;
 
-  case OTA_JOB_ERROR:
-    otaman_cancel_update();
-    break;
+start_failed:
+  esp_event_post_to(OTA_event_h, OTA_EVENTS, OTA_JOB_REJECTED, NULL, 0, 100);
+}
+static void ota_done_handler(void *handler_arg, esp_event_base_t event_base, int32_t event_id,
+                             void *event_data) {
+  vman_deinit();
+  sdman_umount();
+  mqttworker_stop();
+  mqttworker_deinit();
+  ethman_deinit(eth_handle);
+  otaman_deinit();
+  nvsman_deinit();
+  esp_restart();
+}
 
-  default:
-    break;
-  start_failed:
-    esp_event_post_to(OTA_event_h, OTA_EVENTS, OTA_JOB_REJECTED, NULL, 0, 100);
-    break;
-  }
+static void ota_job_error_handler(void *handler_arg, esp_event_base_t event_base, int32_t event_id,
+                                  void *event_data) {
+  otaman_cancel_update();
 }
 
 void app_main(void) {
@@ -161,7 +156,11 @@ void app_main(void) {
   /* Register OTA event loop and handler*/
   ESP_ERROR_CHECK_WITHOUT_ABORT(OTA_eventloop_get_handle(&OTA_event_h));
   ESP_ERROR_CHECK_WITHOUT_ABORT(esp_event_handler_instance_register_with(
-      OTA_event_h, OTA_EVENTS, ESP_EVENT_ANY_ID, ota_event_handler, NULL, NULL));
+      OTA_event_h, OTA_EVENTS, OTA_JOB_RECEIVED, ota_job_received_handler, NULL, NULL));
+  ESP_ERROR_CHECK_WITHOUT_ABORT(esp_event_handler_instance_register_with(
+      OTA_event_h, OTA_EVENTS, OTA_CTRL_DONE, ota_done_handler, NULL, NULL));
+  ESP_ERROR_CHECK_WITHOUT_ABORT(esp_event_handler_instance_register_with(
+      OTA_event_h, OTA_EVENTS, OTA_JOB_ERROR, ota_job_error_handler, NULL, NULL));
 
   // Initialize ethernet
   ethman_inited = ethman_init(&eth_handle);
