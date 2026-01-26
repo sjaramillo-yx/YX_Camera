@@ -37,8 +37,11 @@ static esp_err_t ota_rec_retrieved;
 static esp_event_loop_handle_t OTA_event_h;
 
 /*================== Static Functions ==================*/
-static esp_err_t dummy_test(char out_msg[128]) {
-  strlcpy(out_msg, "This is a test", 128);
+static esp_err_t main_test(char out_msg[128]) {
+  if (CONFIG_AWS_ENDPOINT[0] == '\0') {
+    strlcpy(out_msg, "AWS IoTCore Endpoint is empty", 128);
+    return ESP_ERR_NOT_FOUND;
+  }
   return ESP_OK;
 }
 
@@ -81,6 +84,10 @@ static void ota_event_handler(void *handler_arg, esp_event_base_t event_base, in
     otaman_deinit();
     nvsman_deinit();
     esp_restart();
+    break;
+
+  case OTA_JOB_ERROR:
+    otaman_cancel_update();
     break;
 
   default:
@@ -168,7 +175,7 @@ void app_main(void) {
 
   // Test the OTA partition
   // ota_test_boot_ota0_once();
-  esp_err_t part_test = otaman_run_test(dummy_test, ota_rec);
+  esp_err_t part_test = otaman_run_test(main_test, ota_rec);
 
   ota_result_t ota_res = {.err_code = ota_rec->esp_err};
   strlcpy(ota_res.job_id, ota_rec->job_id, sizeof(ota_res.job_id));

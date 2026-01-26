@@ -25,11 +25,12 @@ extern "C" {
  * @brief A data structure to store certificate data in a blob.
  */
 typedef struct cert_data_t {
-  char client_crt[4096];
-  char client_key[4096];
-  char root_ca[4096];
-  char cert_id[512];
-  char thing_name[128];
+  char client_crt[4096];  // Client certificate for AWS IoT.
+  char client_key[4096];  // Client private key for AWS IoT.
+  char root_ca[4096];     // Root CA for AWS.
+  char cert_id[512];      // The Client certificate ID.
+  char ota_key[4096];     // The OTA codesigning certificate to validate firmware images.
+  char thing_name[128];   // The ThingName of this device in AWS IoT Core.
   bool populated;
 } cert_data_t;
 

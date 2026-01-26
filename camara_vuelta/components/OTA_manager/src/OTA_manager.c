@@ -193,6 +193,18 @@ esp_err_t otaman_start_update(uint32_t image_size) {
   return ESP_OK;
 }
 
+esp_err_t otaman_cancel_update() {
+  ESP_RETURN_ON_FALSE(otaman_state <= OTA_MAN_DONE, ESP_ERR_INVALID_STATE, TAG,
+                      "No update is in progress");
+  ESP_RETURN_ON_FALSE(s_ota_task_h != NULL, ESP_ERR_INVALID_STATE, TAG,
+                      "OTA Task hasn't been created");
+  ESP_RETURN_ON_FALSE(eTaskGetState(s_ota_task_h) < eDeleted, ESP_ERR_INVALID_STATE, TAG,
+                      "OTA Task is not running");
+  vTaskSuspend(s_ota_task_h);
+  ESP_RETURN_ON_ERROR(esp_ota_abort(s_ota_handle), TAG, "Couldn't abort OTA process");
+  return ESP_OK;
+}
+
 /*================== Initalize, Begin, Stop and Deinitialize ==================*/
 esp_err_t otaman_init(QueueHandle_t *free_chunk_queue, QueueHandle_t *filled_chunk_queue) {
   esp_err_t ret = ESP_OK;

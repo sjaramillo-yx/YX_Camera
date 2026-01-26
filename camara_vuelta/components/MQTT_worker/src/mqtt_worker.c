@@ -381,7 +381,7 @@ esp_err_t mqttworker_publish_current_state(cJSON *sdJSON, bool is_recording) {
   int msg_id  = esp_mqtt_client_publish(
       client, CONFIG_PROJ_BASE_NAME "/" CONFIG_PROJ_ENV_NAME "/cameras/status", payload_str, 0, 1,
       0);
-  ESP_LOGD(TAG, "sent publish successful, msg_id=%d", msg_id);
+  ESP_LOGV(TAG, "sent publish successful, msg_id=%d", msg_id);
   if (payload_str)
     cJSON_free(payload_str);
   if (payload)
@@ -449,6 +449,7 @@ esp_err_t mqttworker_init(QueueHandle_t free_chunk_queue, QueueHandle_t filled_c
   /// TODO: Catch other errors
   err = nvsman_get_certs(&mqtt_cert_data);
   ESP_LOGD(TAG, "ThingName is %s", mqtt_cert_data.thing_name);
+  ESP_LOGD(TAG, "OTA certificate is %s", mqtt_cert_data.ota_key);
   mqtt_cfg.credentials.client_id = (const char *)mqtt_cert_data.thing_name;
   client                         = esp_mqtt_client_init(&mqtt_cfg);
 
@@ -463,8 +464,9 @@ esp_err_t mqttworker_init(QueueHandle_t free_chunk_queue, QueueHandle_t filled_c
                                                mqttworker_rec_handler, NULL, &rec_handler_h),
       TAG, "Couldn't register recording events handler");
   /* Initialize the jobs manager */
-  ESP_RETURN_ON_ERROR(jobs_init(client, free_chunk_queue, filled_chunk_queue), TAG,
-                      "Couldn't initialize the jobs manager");
+  ESP_RETURN_ON_ERROR(
+      jobs_init(client, mqtt_cert_data.ota_key, free_chunk_queue, filled_chunk_queue), TAG,
+      "Couldn't initialize the jobs manager");
   /* Initialize the uploader */
   s3uploader_cfg_t up_cfg = {
       .thing_name       = mqtt_cert_data.thing_name,

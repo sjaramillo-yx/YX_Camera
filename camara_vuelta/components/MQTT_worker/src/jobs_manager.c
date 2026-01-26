@@ -37,6 +37,7 @@ typedef struct {
 
 /* ================ Globals ================ */
 static ota_stream_t             ota_stream = {0};
+static ota_result_t             ota_res    = {0};
 static esp_mqtt_client_handle_t mqtt_client;
 static mbedtls_sha256_context   s_sha_ctx;  // Hashing context
 
@@ -55,6 +56,10 @@ static QueueHandle_t s_filled_stream_data_q;   // items: data_block_t
 // Event loops and handlers
 static esp_event_loop_handle_t      OTA_event_h = NULL;
 static esp_event_handler_instance_t ota_handler_h;
+
+// Codesign public key
+static char              *ota_key = NULL;
+static mbedtls_pk_context ctx;
 
 /*================== MQTT Helpers ==================*/
 /**
@@ -216,10 +221,7 @@ cleanup:
 /*================== Static Functions ==================*/
 /**
  * @brief Verify a SHA-256 hash against a Base64 signature
- *
- * @todo Decide how to deliver the OTA certificate to the device
  */
-/*
 static esp_err_t verify_signature(const unsigned char *sha_digest, const char *signature_b64) {
   esp_err_t ret = ESP_OK;
   // Decode the base64 signature into binary
@@ -232,21 +234,23 @@ static esp_err_t verify_signature(const unsigned char *sha_digest, const char *s
                     cleanup, TAG, "Couldn't decode signature");
 
   // Load the certificate
-  mbedtls_x509_crt cert;
-  mbedtls_x509_crt_init(&cert);
-  ESP_GOTO_ON_ERROR(mbedtls_x509_crt_parse(&cert, (const unsigned char *)ota_cert_pem_start,
-                                           strlen((char *)ota_cert_pem_start) + 1),  // +1 for '\0'
-                    cleanup, TAG, "Couldn't patse the OTA certificate");
+  mbedtls_pk_init(&ctx);
+  ESP_LOGD(TAG, "OTA cert: %s", ota_key);
+  ESP_GOTO_ON_ERROR(mbedtls_pk_parse_public_key(&ctx, (unsigned char *)ota_key,
+                                                strlen(ota_key) + 1),  // +1 for '\0'
+                    cleanup, TAG, "Couldn't parse the OTA public key");
 
   // Verify the digest
   ESP_GOTO_ON_ERROR(
-      mbedtls_pk_verify(&cert.pk, MBEDTLS_MD_SHA256, sha_digest, 32, sig_bin, sig_bin_len), cleanup,
-      TAG, "Verification failed (%s)");
+      mbedtls_pk_verify(&ctx, MBEDTLS_MD_SHA256, sha_digest, 32, sig_bin, sig_bin_len), cleanup,
+      TAG, "Verification failed");
   ESP_LOGI(TAG, "SHA-256 hash verified successfully");
 cleanup:
+  mbedtls_pk_free(&ctx);
+  if (ret != ESP_OK)
+    ESP_LOGE(TAG, "Verification failed with code 0x%02x", ret);
   return ret;
 }
-*/
 
 static esp_err_t file_process_ota_data(char *buf, int buflen) {
   esp_err_t    ret = ESP_OK;
@@ -509,8 +513,6 @@ void download_task(void *arg) {
         /// TODO: After a certain amount of retries, pause the job and wait for a notification
         continue;
       };  // end while
-      // Add this block buffer to the hash
-      mbedtls_sha256_update(&s_sha_ctx, (unsigned char *)data_block.data, data_block.len);
       ESP_LOGV(TAG, "Received chunk with buffer at %p", curr_chunk.data);
       // Fill the chunk buffer
       memcpy(curr_chunk.data + (data_block.index % CONFIG_DATA_BLOCK_COUNT) * get_conf.block_size,
@@ -527,21 +529,34 @@ void download_task(void *arg) {
         strlcpy(curr_chunk.job_id, ota_stream.job_id, sizeof(curr_chunk.job_id));
       }
     }  // end for
+    // Add this data chunk to the hash
+    mbedtls_sha256_update(&s_sha_ctx, (unsigned char *)curr_chunk.data, curr_chunk.len);
     // Send the chunk back to the OTA Manager
+    if (curr_chunk.last) {
+      // Close the hasher
+      uint8_t resulting_sha256[32];
+      mbedtls_sha256_finish(&s_sha_ctx, resulting_sha256);
+      ESP_LOGI(TAG, "Download complete, SHA256 is:");
+      ESP_LOG_BUFFER_HEX(TAG, resulting_sha256, 32);
+      if ((ret = verify_signature(resulting_sha256, ota_stream.file_signature)) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed verifying OTA update signature, cancelling");
+        ota_res.err_code = ret;
+        strlcpy(ota_res.detail, "Firmware signature verification failed", sizeof(ota_res.detail));
+        strlcpy(ota_res.job_id, ota_stream.job_id, sizeof(ota_res.job_id));
+        strlcpy(ota_res.thing_name, ota_stream.thing_name, sizeof(ota_res.thing_name));
+        esp_event_post_to(OTA_event_h, OTA_EVENTS, OTA_JOB_ERROR, &ota_res, sizeof(ota_result_t),
+                          portMAX_DELAY);
+        goto cleanup;
+      };
+    }
     ESP_LOGV(TAG, "Sending chunk %d to the OTA Manager", i);
     xQueueSendToBack(s_filled_chunk_q, &curr_chunk, portMAX_DELAY);
-    // Get next OTA chunk
     memset(&curr_chunk, 0, sizeof(ota_chunk_t));
+    // Get next OTA chunk
     while (xQueueReceive(s_free_chunk_q, &curr_chunk, portMAX_DELAY) != pdTRUE) {
       continue;
     }
   }  // end for
-
-  // Close the hasher
-  uint8_t resulting_sha256[32];
-  mbedtls_sha256_finish(&s_sha_ctx, resulting_sha256);
-  ESP_LOGI(TAG, "Download complete, SHA256 is:");
-  ESP_LOG_BUFFER_HEX(TAG, resulting_sha256, 32);
 
 cleanup:
   mbedtls_sha256_free(&s_sha_ctx);
@@ -631,7 +646,8 @@ esp_err_t jobs_data_handler(const char *thing_name, const char *data, int data_l
   char      topic_name[256];
 
   job_class_t job_class = jobs_get_job_class(data);
-  /// NOTE: VIDEO_UPLOAD jobs are not currently supported. Video upload is done via the s3_uploader.
+  /// NOTE: VIDEO_UPLOAD jobs are not currently supported. Video upload is done via the
+  /// s3_uploader.
   ESP_LOGV(TAG, "This Job is a%s job",
            job_class == OTA_UPDATE ? "n OTA_UPDATE"
                                    : (job_class == VIDEO_UPLOAD ? " VIDEO_UPLOAD" : "n INVALID"));
@@ -748,9 +764,10 @@ esp_err_t jobs_stream_data_handler(const char *thing_name, const char *data, int
 }
 
 /*================== Initalize, Begin, Stop and Deinitialize ==================*/
-esp_err_t jobs_init(esp_mqtt_client_handle_t client, QueueHandle_t free_chunk_queue,
-                    QueueHandle_t filled_chunk_queue) {
+esp_err_t jobs_init(esp_mqtt_client_handle_t client, char *codesign_certificate,
+                    QueueHandle_t free_chunk_queue, QueueHandle_t filled_chunk_queue) {
   mqtt_client      = client;
+  ota_key          = codesign_certificate;
   s_free_chunk_q   = free_chunk_queue;
   s_filled_chunk_q = filled_chunk_queue;
   // Get the OTA event loop handles
@@ -774,7 +791,7 @@ esp_err_t jobs_deinit(void) {
 
   for (int i = 0; i < CONFIG_DATA_BLOCK_COUNT; ++i) {
     if (s_data_block_buffers[i])
-      heap_caps_aligned_free(s_data_block_buffers[i]);
+      heap_caps_free(s_data_block_buffers[i]);
   }
 
   ESP_RETURN_ON_ERROR(esp_event_handler_instance_unregister_with(OTA_event_h, OTA_EVENTS,

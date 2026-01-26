@@ -67,6 +67,11 @@ esp_err_t otaman_can_start(uint32_t image_size);
 esp_err_t otaman_start_update(uint32_t image_size);
 
 /**
+ * @brief Cancel the OTA Update process
+ */
+esp_err_t otaman_cancel_update();
+
+/**
  * @brief Initalize the OTA Manager
  */
 esp_err_t otaman_init(QueueHandle_t *free_chunk_queue, QueueHandle_t *filled_chunk_queue);
