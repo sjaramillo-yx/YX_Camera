@@ -106,6 +106,12 @@ def lambda_handler(event, context):
         set_attrs["targetFps"] = _n(event["targetFps"])
     if event.get("targetBitrate") is not None:
         set_attrs["targetBitrate"] = _n(event["targetBitrate"])
+    
+    # Resolution fields
+    if event.get("hres") is not None:
+        set_attrs["hres"] = _n(event["hres"])
+    if event.get("vres") is not None:
+        set_attrs["vres"] = _n(event["vres"])
 
     _update_item(pk, sk, set_attrs=set_attrs, remove_attrs=remove_attrs)
 

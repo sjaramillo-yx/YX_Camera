@@ -276,6 +276,7 @@ CHANGE_SET_ID="$(
     --parameters \
       ParameterKey=Environment,ParameterValue="$ENVIRONMENT" \
       ParameterKey=LowercaseStackName,ParameterValue="$LOWERCASE_STACK_BASE" \
+      ParameterKey=BootstrapTrigger,ParameterValue="$(date +%s)" \
     --import-existing-resources \
     --query 'Id' --output text 2>&1
 )"

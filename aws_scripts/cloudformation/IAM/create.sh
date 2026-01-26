@@ -1,6 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Determine available Python interpreter (python3 preferred)
+PYTHON_BIN=""
+if command -v python3 >/dev/null 2>&1; then
+  PYTHON_BIN="python3"
+elif command -v python >/dev/null 2>&1; then
+  PYTHON_BIN="python"
+else
+  echo "ERROR: Neither python3 nor python is available in PATH. Install Python to continue." >&2
+  exit 1
+fi
+
+
+
 usage() {
   cat <<'EOF'
 Usage:
@@ -115,7 +128,7 @@ log() { echo "==> $*" >&2; }
 
 generate_temp_password() {
   # Generates a strong temp password that includes upper/lower/digit/symbol.
-  python - <<'PY'
+  ${PYTHON_BIN} - <<'PY'
 import secrets, string
 upper = string.ascii_uppercase
 lower = string.ascii_lowercase
@@ -190,8 +203,7 @@ render_json() {
     -e "s|\${ENV}|${env_name}|g" \
     -e "s|\${ENV_GROUP}|${ENV_GROUP}|g" \
     "${in_file}" > "${out_file}"
-
-  python -m json.tool "${out_file}" >/dev/null
+  ${PYTHON_BIN} -m json.tool "${out_file}" >/dev/null
 }
 
 policy_arn_by_name() {
@@ -457,6 +469,8 @@ ensure_attach_role_policy "yx-deployer-devtest" "${deployer_devtest_policy_arn}"
 # 3b) IoT Core dev/test permissions (CLI + Console)
 iot_devtest_policy_arn="$(ensure_managed_policy "yx-iot-devtest-policy" "${ROOT_DIR}/policies/iot-devtest-policy.json")"
 ensure_attach_role_policy "yx-deployer-devtest" "${iot_devtest_policy_arn}"
+ota_devtest_policy_arn="$(ensure_managed_policy "yx-ota-devtest-policy" "${ROOT_DIR}/policies/ota-devtest-policy.json")"
+ensure_attach_role_policy "yx-deployer-devtest" "${ota_devtest_policy_arn}"
 ddb_devtest_policy_arn="$(ensure_managed_policy "yx-ddb-devtest-policy" "${ROOT_DIR}/policies/ddb-devtest-policy.json")"
 ensure_attach_role_policy "yx-deployer-devtest" "${ddb_devtest_policy_arn}"
 s3_devtest_policy_arn="$(ensure_managed_policy "yx-s3-devtest-policy" "${ROOT_DIR}/policies/s3-devtest-policy.json")"
@@ -485,6 +499,15 @@ if [[ -n "${PM_USER}" ]]; then
   put_inline_user_policy "${PM_USER}" "AssumeYxDeployerProd" "${ROOT_DIR}/policies/assume-deployer-prod.json"
   ensure_role "yx-deployer-prod" "${ROOT_DIR}/roles/deployer-trust-user.json" "${PM_USER}"
   maybe_create_access_key "${PM_USER}"
+
+  iot_prod_policy_arn="$(ensure_managed_policy "yx-iot-prod-policy" "${ROOT_DIR}/policies/iot-prod-policy.json")"
+  ensure_attach_role_policy "yx-deployer-prod" "${iot_prod_policy_arn}"
+  ota_prod_policy_arn="$(ensure_managed_policy "yx-ota-prod-policy" "${ROOT_DIR}/policies/ota-prod-policy.json")"
+  ensure_attach_role_policy "yx-deployer-prod" "${ota_prod_policy_arn}"
+  ddb_prod_policy_arn="$(ensure_managed_policy "yx-ddb-prod-policy" "${ROOT_DIR}/policies/ddb-prod-policy.json")"
+  ensure_attach_role_policy "yx-deployer-prod" "${ddb_prod_policy_arn}"
+  s3_prod_policy_arn="$(ensure_managed_policy "yx-s3-prod-policy" "${ROOT_DIR}/policies/s3-prod-policy.json")"
+  ensure_attach_role_policy "yx-deployer-prod" "${s3_prod_policy_arn}"
 else
   log "Skipping prod deployer role + PM user (no --pm-user provided)."
 fi

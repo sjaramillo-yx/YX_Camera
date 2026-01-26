@@ -13,6 +13,10 @@ Parameters:
   LowercaseStackName:
     Type: String
 
+  BootstrapTrigger:
+    Type: String
+    Default: "0"
+
 Conditions:
   IsProd: !Equals [!Ref Environment, prod]
 
@@ -74,9 +78,42 @@ Resources:
           - ServerSideEncryptionByDefault:
               SSEAlgorithm: AES256
   
+  CodeSigningStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: nested/codeSigning.yaml
+      Parameters:
+        ParentStackName: !Select [0, !Split ["-", !Ref "AWS::StackName"]]
+        Environment: !Ref Environment
+        SigningProfileName: !Sub
+          - "${ParentStackName}_codesigner_${Environment}"
+          - { ParentStackName: !Select [0, !Split ["-", !Ref "AWS::StackName"]] }
+        CertArnSsmParamName: !Sub
+          - "/vuelta-cam/${ParentStackName}/${Environment}/codesign/certArn"
+          - { ParentStackName: !Select [0, !Split ["-", !Ref "AWS::StackName"]] }
+        BootstrapTrigger: !Ref BootstrapTrigger
+
+  OtaAdminStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: [
+      CameraDataBucket,
+      IoTCoreStack,
+      CodeSigningStack
+    ]
+    Properties:
+      TemplateURL: nested/OtaAdmin.yaml
+      Parameters:
+        ParentStackName: !Select [0, !Split ["-", !Ref "AWS::StackName"]]
+        Environment: !Ref Environment
+        CameraDataBucketName: !Ref CameraDataBucket
+        OtaServiceRoleArn: !GetAtt IoTCoreStack.Outputs.OtaServiceRoleArn
+        SigningProfileName: !GetAtt CodeSigningStack.Outputs.SigningProfileName
+        UnsignedPrefix: firmware/unsigned/
+        SignedPrefix: firmware/signed/
+
   AppSyncStack:
     Type: AWS::CloudFormation::Stack
-    DependsOn: DynamoStack
+    DependsOn: [DynamoStack, OtaAdminStack]
     Properties:
       TemplateURL: nested/appSync.yaml
       Parameters:
@@ -85,6 +122,7 @@ Resources:
         DynamoTableName: !GetAtt DynamoStack.Outputs.TableName
         DynamoTableArn: !GetAtt DynamoStack.Outputs.TableArn
         AuthType: API_KEY # optional (AWS_IAM or API_KEY)
+        OtaAdminLambdaArn: !GetAtt OtaAdminStack.Outputs.OtaAdminLambdaArn
 
 
 Outputs:

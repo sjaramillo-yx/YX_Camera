@@ -127,14 +127,26 @@ Resources:
         RuleDisabled: false
         Description: "Extract information about the camera when it first boots and connects to the server"
         Sql: !Sub |
+          SET
+            @nowMs = timestamp(),
+            @pad = concat('0000000000000', cast(@nowMs as String)),
+            @updatedAtSortable = substring(@pad, length(@pad) - 13)
+
           SELECT
             concat('Camera#', cast(thingName as String)) AS PK,
             'info' AS SK,
+
+            cast(thingName as String) AS thingName,
             firmwareVersion,
             videoInfo.sensorModel.name as sensorModel,
-            timestamp() AS updatedAt
+            @nowMs AS updatedAt,
+
+            'CameraInfo#ALL' AS cameraInfoByUpdatedAtPk,
+            concat(@updatedAtSortable, '#', thingName) AS cameraInfoByUpdatedAtSk
+
           FROM '${ParentStackName}/${Environment}/cameras/hello'
           WHERE thingName = clientid()
+
         Actions:
           - DynamoDBv2:
               RoleArn: !Ref DynamoRoleArn
@@ -218,8 +230,10 @@ Resources:
             'Recs#ALL' AS allRecordingsPk,
             concat(cast(@nowMs as String), '#', @pk, '#', @transaction) AS allRecordingsSk,
           
-            CASE @isStart WHEN true THEN targetBitrate END AS targetBitrate,
-            CASE @isStart WHEN true THEN targetFps     END AS targetFps,
+            CASE @isStart WHEN true THEN targetBitrate      END AS targetBitrate,
+            CASE @isStart WHEN true THEN targetFps          END AS targetFps,
+            CASE @isStart WHEN true THEN get(resolution, 0) END AS hres,
+            CASE @isStart WHEN true THEN get(resolution, 1) END AS vres,
 
             CASE @isOngoing WHEN true THEN 'Recs#ALL'                                                  END AS allRecordingsPk,
             CASE @isOngoing WHEN true THEN concat(cast(@nowMs as String), '#', @pk, '#', @transaction) END AS allRecordingsSk,

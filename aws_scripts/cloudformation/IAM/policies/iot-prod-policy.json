@@ -32,34 +32,31 @@
       }
     },
     {
-      "Sid": "PublishToTestTopics",
+      "Sid": "PublishToProdTopics",
       "Effect": "Allow",
       "Action": "iot:Publish",
       "Resource": [
-        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:topic/${STACK_BASE}/dev/*",
-        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:topic/${STACK_BASE}/test/*"
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:topic/${STACK_BASE}/prod/*"
       ]
     },
     {
-      "Sid": "SubscribeToTestTopicFilters",
+      "Sid": "SubscribeToProdTopicFilters",
       "Effect": "Allow",
       "Action": "iot:Subscribe",
       "Resource": [
-        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:topicfilter/${STACK_BASE}/dev/*",
-        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:topicfilter/${STACK_BASE}/test/*"
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:topicfilter/${STACK_BASE}/prod/*"
       ]
     },
     {
-      "Sid": "ReceiveFromTestTopics",
+      "Sid": "ReceiveFromProdTopics",
       "Effect": "Allow",
       "Action": "iot:Receive",
       "Resource": [
-        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:topic/${STACK_BASE}/dev/*",
-        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:topic/${STACK_BASE}/test/*"
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:topic/${STACK_BASE}/prod/*"
       ]
     },
     {
-      "Sid": "IoTManageDevTestNamedResources",
+      "Sid": "IoTManageProdNamedResources",
       "Effect": "Allow",
       "Action": [
         "iot:CreateThing",
@@ -92,20 +89,13 @@
         "iot:UntagResource"
       ],
       "Resource": [
-        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:thing/${STACK_BASE}-*-dev",
-        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:thing/${STACK_BASE}-*-test",
-        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:thinggroup/${STACK_BASE}-*-dev",
-        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:thinggroup/${STACK_BASE}-*-test",
-        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:thingtype/${STACK_BASE}-*-dev",
-        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:thingtype/${STACK_BASE}-*-test",
-        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:policy/${STACK_BASE}-*-dev",
-        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:policy/${STACK_BASE}-*-test",
-        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:rule/${STACK_BASE}_*_dev",
-        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:rule/${STACK_BASE}_*_test",
-        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:rolealias/${STACK_BASE}-*-dev",
-        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:rolealias/${STACK_BASE}-*-test",
-        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:provisioningtemplate/${STACK_BASE}-*-dev",
-        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:provisioningtemplate/${STACK_BASE}-*-test"
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:thing/${STACK_BASE}-*-prod",
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:thinggroup/${STACK_BASE}-*-prod",
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:thingtype/${STACK_BASE}-*-prod",
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:policy/${STACK_BASE}-*-prod",
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:rule/${STACK_BASE}_*_prod",
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:rolealias/${STACK_BASE}-*-prod",
+        "arn:aws:iot:${REGION}:${ACCOUNT_ID}:provisioningtemplate/${STACK_BASE}-*-prod"
       ]
     },
     {
@@ -137,12 +127,11 @@
       "Resource": "*"
     },
     {
-      "Sid": "PassIoTRulesRoleDevTest",
+      "Sid": "PassIoTRulesRoleProd",
       "Effect": "Allow",
       "Action": "iam:PassRole",
       "Resource": [
-        "arn:aws:iam::${ACCOUNT_ID}:role/IoT-rules-role-${STACK_BASE}-dev",
-        "arn:aws:iam::${ACCOUNT_ID}:role/IoT-rules-role-${STACK_BASE}-test"
+        "arn:aws:iam::${ACCOUNT_ID}:role/IoT-rules-role-${STACK_BASE}-prod"
       ],
       "Condition": {
         "StringEquals": {
@@ -197,10 +186,8 @@
         "logs:StopQuery"
       ],
       "Resource": [
-        "arn:aws:logs:${REGION}:${ACCOUNT_ID}:log-group:/aws/lambda/${STACK_BASE}_*_dev",
-        "arn:aws:logs:${REGION}:${ACCOUNT_ID}:log-group:/aws/lambda/${STACK_BASE}_*_dev:*",
-        "arn:aws:logs:${REGION}:${ACCOUNT_ID}:log-group:/aws/lambda/${STACK_BASE}_*_test",
-        "arn:aws:logs:${REGION}:${ACCOUNT_ID}:log-group:/aws/lambda/${STACK_BASE}_*_test:*"
+        "arn:aws:logs:${REGION}:${ACCOUNT_ID}:log-group:/aws/lambda/${STACK_BASE}_*_prod",
+        "arn:aws:logs:${REGION}:${ACCOUNT_ID}:log-group:/aws/lambda/${STACK_BASE}_*_prod:*"
       ]
     }
   ]

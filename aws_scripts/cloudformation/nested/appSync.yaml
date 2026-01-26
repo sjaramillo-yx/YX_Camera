@@ -16,6 +16,11 @@ Parameters:
     Type: String
     Description: DynamoDB table ARN (used for IAM policies).
 
+  OtaAdminLambdaArn:
+    Type: String
+    Default: ""
+    Description: ARN of the OTA Admin Lambda (invoked by admin mutation createOtaUpdate).
+
   AuthType:
     Type: String
     Default: AWS_IAM
@@ -42,6 +47,7 @@ Resources:
       Definition: |
         schema {
           query: Query
+          mutation: Mutation
         }
 
         type Camera {
@@ -63,6 +69,18 @@ Resources:
 
         type CameraListPage {
           items: [Camera!]!
+          nextToken: String
+        }
+
+        type CameraInfo {
+          thingName: ID!
+          firmwareVersion: String
+          sensorModel: String
+          updatedAt: AWSTimestamp
+        }
+
+        type CameraInfoListPage {
+          items: [CameraInfo!]!
           nextToken: String
         }
 
@@ -113,11 +131,44 @@ Resources:
           nextToken: String
         }
 
+        input CreateOtaUpdateInput {
+          thingNames: [ID!]!
+          cameraModel: String!
+          firmwareVersion: String!
+          waitForOtaCreate: Boolean
+          waitSeconds: Int
+          pollIntervalSeconds: Int
+        }
+
+        type OtaS3ObjectRef {
+          bucket: String!
+          key: String!
+          version: String
+        }
+
+        type CreateOtaUpdatePayload {
+          otaUpdateId: ID!
+          reusedSigned: Boolean!
+          unsigned: OtaS3ObjectRef!
+          signed: OtaS3ObjectRef!
+          targets: [ID!]!
+          otaUpdateStatus: String!
+          errorInfo: String
+        }
+
+        type Mutation {
+          # Admin: create an OTA update targeting many Things at once
+          createOtaUpdate(input: CreateOtaUpdateInput!): CreateOtaUpdatePayload!
+        }
+
         type Query {
           #  Get details about a particular camera
           getCamera(thingName: ID!): Camera
           #  Returns cameras ordered by most-recent lastSeen first (via GSI sort key + descending query)
           listCameraStatuses(limit: Int, nextToken: String): CameraListPage!
+          #  Returns camera info
+          listCameraInfo(limit: Int, nextToken: String): CameraInfoListPage!
+
           #  Returns recordings ordered by most-recently updated first
           listRecordings(limit: Int, nextToken: String): RecordingsList!
           #  Returns recordings for a particular camera
@@ -163,6 +214,38 @@ Resources:
                 Resource:
                   - !Ref DynamoTableArn
                   - !Sub "${DynamoTableArn}/index/*"
+
+
+  AppSyncLambdaInvokeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ParentStackName}-AppSyncLambdaInvoke-${Environment}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: appsync.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: InvokeOtaAdminLambda
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: !Ref OtaAdminLambdaArn
+
+  OtaAdminLambdaDataSource:
+    Type: AWS::AppSync::DataSource
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      Name: ota_admin_lambda
+      Type: AWS_LAMBDA
+      ServiceRoleArn: !GetAtt AppSyncLambdaInvokeRole.Arn
+      LambdaConfig:
+        LambdaFunctionArn: !Ref OtaAdminLambdaArn
 
   CameraTableDataSource:
     Type: AWS::AppSync::DataSource
@@ -387,6 +470,63 @@ Resources:
               sdPresent: it.sdPresent,
               sdSizeMB: it.sdSizeMB,
               sdFreeMB: it.sdFreeMB
+            };
+          });
+
+          return { items: mapped, nextToken };
+        }
+
+  ListCameraInfoResolver:
+    Type: AWS::AppSync::Resolver
+    DependsOn:
+      - GraphQLSchema
+      - CameraTableDataSource
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      TypeName: Query
+      FieldName: listCameraInfo
+      Kind: UNIT
+      DataSourceName: !GetAtt CameraTableDataSource.Name
+      Runtime:
+        Name: APPSYNC_JS
+        RuntimeVersion: "1.0.0"
+      Code: |
+        import { util } from "@aws-appsync/utils";
+
+        export function request(ctx) {
+          const args = ctx.args ?? ctx.arguments ?? {};
+          const limit = args.limit ?? 50;
+          const nextToken = args.nextToken;
+
+          return {
+            operation: "Query",
+            index: "camera-info-by-updated-at",
+            query: {
+              expression: "#pk = :pk",
+              expressionNames: { "#pk": "cameraInfoByUpdatedAtPk" },
+              expressionValues: util.dynamodb.toMapValues({ ":pk": "CameraInfo#ALL" }),
+            },
+            limit,
+            nextToken,
+            scanIndexForward: false, // newest info first
+          };
+        }
+
+        export function response(ctx) {
+          const { items = [], nextToken = null } = ctx.result ?? {};
+
+          const mapped = items.map((it) => {
+            // Prefer explicit thingName (if stored); otherwise derive from PK ("Camera#<thingName>")
+            let thingName = it.thingName;
+            if (!thingName && typeof it.PK === "string" && it.PK.startsWith("Camera#")) {
+              thingName = it.PK.slice("Camera#".length);
+            }
+
+            return {
+              thingName,
+              firmwareVersion: it.firmwareVersion,
+              sensorModel: it.sensorModel,
+              updatedAt: it.updatedAt,
             };
           });
 
@@ -878,6 +1018,41 @@ Resources:
 
 
     
+  CreateOtaUpdateResolver:
+    Type: AWS::AppSync::Resolver
+    DependsOn:
+      - GraphQLSchema
+      - OtaAdminLambdaDataSource
+    Properties:
+      ApiId: !GetAtt GraphQLApi.ApiId
+      TypeName: Mutation
+      FieldName: createOtaUpdate
+      DataSourceName: !GetAtt OtaAdminLambdaDataSource.Name
+      Kind: UNIT
+      Runtime:
+        Name: APPSYNC_JS
+        RuntimeVersion: 1.0.0
+      Code: |
+        import { util } from '@aws-appsync/utils';
+
+        export function request(ctx) {
+          if (!ctx.args || !ctx.args.input) {
+            util.error('Missing input', 'BadRequest');
+          }
+          return {
+            operation: 'Invoke',
+            payload: ctx.args.input
+          };
+        }
+
+        export function response(ctx) {
+          if (ctx.error) {
+            util.error(ctx.error.message, ctx.error.type || 'LambdaError');
+          }
+          return ctx.result;
+        }
+
+
 Outputs:
   ApiId:
     Value: !GetAtt GraphQLApi.ApiId
