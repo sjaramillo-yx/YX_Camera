@@ -56,6 +56,15 @@ Resources:
         - Effect: Allow
           Action: iot:Publish
           Resource: !Sub arn:aws:iot:*:*:topic/${ParentStackName}/${Environment}/uploads/${!iot:Connection.Thing.ThingName}/*
+        - Effect: Allow
+          Action: iot:Subscribe
+          Resource: !Sub arn:aws:iot:*:*:topicfilter/${ParentStackName}/${Environment}/cameras/${!iot:Connection.Thing.ThingName}/configure
+        - Effect: Allow
+          Action: iot:Receive
+          Resource: !Sub arn:aws:iot:*:*:topic/${ParentStackName}/${Environment}/cameras/${!iot:Connection.Thing.ThingName}/configure
+        - Effect: Allow
+          Action: iot:Publish
+          Resource: !Sub arn:aws:iot:*:*:topic/${ParentStackName}/${Environment}/cameras/${!iot:Connection.Thing.ThingName}/configure/response
 
   IoTProvisionerRole:
     Type: AWS::IAM::Role
