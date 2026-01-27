@@ -7,6 +7,11 @@ CONFIG_IDF_EXPERIMENTAL_FEATURES=y
 CONFIG_ESP_SYSTEM_PANIC_PRINT_HALT=y
 
 ##################################################
+## FREERTOS
+#
+FREERTOS_TIMER_TASK_STACK_DEPTH=4096
+
+##################################################
 ## OTA
 #
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y

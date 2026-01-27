@@ -13,6 +13,7 @@ set(
   requires
     esp_app_format
     json
+    configuration_events
     recording_events
     mbedtls
     mqtt

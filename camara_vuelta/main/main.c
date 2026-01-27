@@ -8,11 +8,14 @@
 /* FreeRTOS includes*/
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <freertos/timers.h>
 /* Custom includes */
 #include "OTA_events.h"
+#include "configuration_events.h"
 #include "recording_events.h"
 ESP_EVENT_DEFINE_BASE(RECORDING_EVENTS);  // Event base must be declared here (not sure why)
 ESP_EVENT_DEFINE_BASE(OTA_EVENTS);
+ESP_EVENT_DEFINE_BASE(CONFIGURATION_EVENTS);
 #include "OTA_manager.h"
 #include "SD_manager.h"
 #include "ethernet_manager.h"
@@ -23,7 +26,7 @@ ESP_EVENT_DEFINE_BASE(OTA_EVENTS);
 extern "C" {
 #endif
 
-/* ================ Globals ================ */
+/*=========================================== Globals ============================================*/
 static const char      *TAG = "VueltaCAM";
 static esp_eth_handle_t eth_handle;
 // Initialization success flags
@@ -35,8 +38,14 @@ static esp_err_t hello_published;
 static esp_err_t ota_rec_retrieved;
 // Event loops
 static esp_event_loop_handle_t OTA_event_h;
+static esp_event_loop_handle_t conf_event_h;
+// Peripherals JSONs
+cJSON *sdJSON;
+cJSON *vmanJSON;
+// Timers
+TimerHandle_t status_timer_h;
 
-/*================== Static Functions ==================*/
+/*======================================= Static Functions =======================================*/
 static esp_err_t main_test(char out_msg[128]) {
   if (CONFIG_AWS_ENDPOINT[0] == '\0') {
     strlcpy(out_msg, "AWS IoTCore Endpoint is empty", 128);
@@ -54,7 +63,15 @@ static esp_err_t publish_rec_state() {
   return ret;
 }
 
-/*================== Event Handlers ==================*/
+/*======================================= Timer Callbacks ========================================*/
+static void publish_status_callback(TimerHandle_t xTimer) {
+  sdman_getJSON(&sdJSON);
+  mqttworker_publish_current_state(sdJSON, vman_is_recording());  // This also frees cJSON memory
+  if (vman_is_recording()) {
+    publish_rec_state();
+  }  // end if
+}
+/*======================================== Event Handlers ========================================*/
 static void ota_job_received_handler(void *handler_arg, esp_event_base_t event_base,
                                      int32_t event_id, void *event_data) {
   ota_stream_t *ota_stream;
@@ -93,10 +110,44 @@ static void ota_job_error_handler(void *handler_arg, esp_event_base_t event_base
   otaman_cancel_update();
 }
 
+static void conf_received_handler(void *handler_arg, esp_event_base_t event_base, int32_t event_id,
+                                  void *event_data) {
+  configuration_t *conf           = event_data;
+  char             error_msg[256] = "";
+  esp_err_t        ret            = ESP_OK;  // Necessary for ESP_GOTO macros
+  /// TODO: Define upper and lower limits as KConfig options
+  if (0 < conf->status_period_ms && conf->status_period_ms < portMAX_DELAY) {
+    ESP_LOGD(TAG, "Setting the status message period to %d ms", conf->status_period_ms);
+    if (xTimerChangePeriod(status_timer_h, pdMS_TO_TICKS(conf->status_period_ms), portMAX_DELAY) !=
+        pdPASS) {
+      snprintf(error_msg, sizeof(error_msg), "Couldn't set the new status message period.");
+      goto error;
+    }
+    /// TODO: Remove portMAX_DELAY
+    xTimerReset(status_timer_h, portMAX_DELAY);
+    ESP_LOGI(TAG, "New status message period is %d ms", conf->status_period_ms);
+  } else {
+    snprintf(error_msg, sizeof(error_msg),
+             "Status period outside of limits. Must be greater than %d and lower than %lu.", 0,
+             portMAX_DELAY);
+    goto rejected;
+  }
+rejected:
+  /// TODO: Post CONF_REJECTED event
+  return;
+error:
+  /// TODO: Post CONF_ERROR event
+  return;
+}
+
+/*================================================================================================*/
+/*                                      App entry point                                           */
+/*================================================================================================*/
 void app_main(void) {
   esp_err_t err = ESP_OK;
   // Set log levels
   esp_log_level_set("*", ESP_LOG_INFO);
+  esp_log_level_set(TAG, ESP_LOG_DEBUG);
   esp_log_level_set("mqtt_client", ESP_LOG_INFO);
   esp_log_level_set("transport_base", ESP_LOG_INFO);
   esp_log_level_set("transport", ESP_LOG_INFO);
@@ -144,7 +195,8 @@ void app_main(void) {
     }
   }
 
-  // Create the event loops
+  // Create the event loopsç
+  conf_eventloop_create();
   rec_eventloop_create();
   OTA_eventloop_create();
   ESP_LOGI(TAG, "Event loops created");
@@ -153,14 +205,18 @@ void app_main(void) {
   QueueHandle_t free_chunk_queue, filled_chunk_queue;
   otaman_init(&free_chunk_queue, &filled_chunk_queue);
 
-  /* Register OTA event loop and handler*/
-  ESP_ERROR_CHECK_WITHOUT_ABORT(OTA_eventloop_get_handle(&OTA_event_h));
-  ESP_ERROR_CHECK_WITHOUT_ABORT(esp_event_handler_instance_register_with(
+  /* Register OTA event loop handlers*/
+  ESP_ERROR_CHECK(OTA_eventloop_get_handle(&OTA_event_h));
+  ESP_ERROR_CHECK(esp_event_handler_instance_register_with(
       OTA_event_h, OTA_EVENTS, OTA_JOB_RECEIVED, ota_job_received_handler, NULL, NULL));
-  ESP_ERROR_CHECK_WITHOUT_ABORT(esp_event_handler_instance_register_with(
-      OTA_event_h, OTA_EVENTS, OTA_CTRL_DONE, ota_done_handler, NULL, NULL));
-  ESP_ERROR_CHECK_WITHOUT_ABORT(esp_event_handler_instance_register_with(
-      OTA_event_h, OTA_EVENTS, OTA_JOB_ERROR, ota_job_error_handler, NULL, NULL));
+  ESP_ERROR_CHECK(esp_event_handler_instance_register_with(OTA_event_h, OTA_EVENTS, OTA_CTRL_DONE,
+                                                           ota_done_handler, NULL, NULL));
+  ESP_ERROR_CHECK(esp_event_handler_instance_register_with(OTA_event_h, OTA_EVENTS, OTA_JOB_ERROR,
+                                                           ota_job_error_handler, NULL, NULL));
+  /* Register configuration event loop handlers */
+  ESP_ERROR_CHECK(conf_eventloop_get_handle(&conf_event_h));
+  ESP_ERROR_CHECK(esp_event_handler_instance_register_with(
+      conf_event_h, CONFIGURATION_EVENTS, CONF_RECEIVED, conf_received_handler, NULL, NULL));
 
   // Initialize ethernet
   ethman_inited = ethman_init(&eth_handle);
@@ -173,7 +229,6 @@ void app_main(void) {
   vman_inited = vman_init();
 
   // Test the OTA partition
-  // ota_test_boot_ota0_once();
   esp_err_t part_test = otaman_run_test(main_test, ota_rec);
 
   ota_result_t ota_res = {.err_code = ota_rec->esp_err};
@@ -204,22 +259,16 @@ void app_main(void) {
     ESP_LOGW(TAG, "The MQTT worker couldn't be initialized. No connection will be attempted");
 
   // Get information about the SD Card
-  cJSON *sdJSON;
   sdman_getJSON(&sdJSON);
   /// Get information about the Video Manager
-  cJSON *vmanJSON;
   vman_getJSON(&vmanJSON);
   // Publish initial state
   hello_published = mqttworker_publish_initial_state(sdJSON, vmanJSON);  // Also frees cJSON memory
 
-  while (true) {
-    vTaskDelay(pdMS_TO_TICKS(30000));
-    sdman_getJSON(&sdJSON);
-    mqttworker_publish_current_state(sdJSON, vman_is_recording());  // This also frees cJSON memory
-    if (vman_is_recording()) {
-      publish_rec_state();
-    }  // end if
-  }  // end while
+  // Create the status timer
+  /// TODO: Turn defaults into KConfig options
+  status_timer_h = xTimerCreate("status.timer", 30000, true, NULL, publish_status_callback);
+  xTimerStart(status_timer_h, portMAX_DELAY);
 }  // end app_main
 
 #ifdef __cplusplus

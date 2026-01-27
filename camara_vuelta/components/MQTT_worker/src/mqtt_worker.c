@@ -8,6 +8,7 @@
 
 #include "mqtt_worker.h"
 #include "NVS_manager.h"
+#include "configuration_events.h"
 #include "jobs_manager.h"
 #include "provision_claimer.h"
 #include "recording_worker.h"
@@ -35,6 +36,9 @@ static cert_data_t mqtt_cert_data;
 static esp_event_loop_handle_t rec_event_h;
 static recording_conf_t        rec_conf;
 static char                    rec_stop_id[128];
+
+/* Configuration events */
+static esp_event_loop_handle_t conf_event_h;
 
 /**
  * @brief The MQTT client
@@ -83,11 +87,19 @@ static void mqtt_connected_handler(void *handler_args, esp_event_base_t base, in
 
   /*----- Subscribe to relevant topics -----*/
   // Recording start topic
-  snprintf(topic_name, 1024, CONFIG_PROJ_BASE_NAME "/" CONFIG_PROJ_ENV_NAME "/recordings/%s/start",
+  snprintf(topic_name, sizeof(topic_name),
+           CONFIG_PROJ_BASE_NAME "/" CONFIG_PROJ_ENV_NAME "/recordings/%s/start",
            mqtt_cert_data.thing_name);
   esp_mqtt_client_subscribe(client, topic_name, 0);
   // Jobs notify topics
-  snprintf(topic_name, 1024, "$aws/things/%s/jobs/notify-next", mqtt_cert_data.thing_name);
+  snprintf(topic_name, sizeof(topic_name), "$aws/things/%s/jobs/notify-next",
+           mqtt_cert_data.thing_name);
+  ESP_LOGD(TAG, "Subscribing to topic: %s", topic_name);
+  esp_mqtt_client_subscribe(client, topic_name, 0);
+  // Camera configuration topic
+  snprintf(topic_name, sizeof(topic_name),
+           CONFIG_PROJ_BASE_NAME "/" CONFIG_PROJ_ENV_NAME "/cameras/%s/configure",
+           mqtt_cert_data.thing_name);
   ESP_LOGD(TAG, "Subscribing to topic: %s", topic_name);
   esp_mqtt_client_subscribe(client, topic_name, 0);
   // Connect the S3 uploader
@@ -116,6 +128,7 @@ static void mqtt_data_handler(void *handler_args, esp_event_base_t base, int32_t
   cJSON                  *payload              = NULL;
   char                    received_topic[1024] = "";
   char                    topic_name[1024]     = "";
+  configuration_t         cam_conf             = {0};
 
   strncpy(received_topic, event->topic, event->topic_len);
   received_topic[event->topic_len] = '\0';
@@ -194,6 +207,37 @@ static void mqtt_data_handler(void *handler_args, esp_event_base_t base, int32_t
     /// TODO: Handle payload being sent in multiple events
     ESP_LOGV(TAG, "Passing data from %s to AWS streams handler", received_topic);
     jobs_stream_data_handler(mqtt_cert_data.thing_name, event->data, event->data_len);
+    goto cleanup;
+  }
+
+  /* -- Camera configuration -- */
+  sprintf(topic_name, CONFIG_PROJ_BASE_NAME "/" CONFIG_PROJ_ENV_NAME "/cameras/%s/configure",
+          mqtt_cert_data.thing_name);
+  if (!strcmp(received_topic, topic_name)) {
+    ESP_LOGI(TAG, "Received configuration message");
+    // Get the payload
+    payload = cJSON_ParseWithLength(event->data, event->data_len);
+    // Check that the formatting is correct
+    if (!cJSON_IsNumber(cJSON_GetObjectItem(payload, "status_period_ms")) ||
+        !cJSON_IsNumber(cJSON_GetObjectItem(payload, "min_sd_free_space_kb")) ||
+        !cJSON_IsNumber(cJSON_GetObjectItem(payload, "keep_alive_period_ms"))) {
+      ESP_LOGW(TAG, "Invalid payload format");
+      goto cleanup;
+    }
+
+    //// TODO: REMOVE THIS!!!!
+    ESP_LOGD(TAG, "%s", cJSON_Print(payload));
+    // Extract values from payload
+    cam_conf.status_period_ms =
+        cJSON_GetNumberValue(cJSON_GetObjectItem(payload, "status_period_ms"));
+    cam_conf.min_sd_free_space_kb =
+        cJSON_GetNumberValue(cJSON_GetObjectItem(payload, "min_sd_free_space_kb"));
+    cam_conf.keep_alive_period_ms =
+        cJSON_GetNumberValue(cJSON_GetObjectItem(payload, "keep_alive_period_ms"));
+    // Publish the configuration event
+    //// TODO: Remove portMAX_DELAY and fail accordingly
+    esp_event_post_to(conf_event_h, CONFIGURATION_EVENTS, CONF_RECEIVED, &cam_conf,
+                      sizeof(configuration_t), portMAX_DELAY);
     goto cleanup;
   }
 
@@ -294,7 +338,8 @@ esp_err_t mqttworker_publish_current_state(cJSON *sdJSON, bool is_recording) {
   int msg_id  = esp_mqtt_client_publish(
       client, CONFIG_PROJ_BASE_NAME "/" CONFIG_PROJ_ENV_NAME "/cameras/status", payload_str, 0, 1,
       0);
-  ESP_LOGV(TAG, "sent publish successful, msg_id=%d", msg_id);
+  ESP_LOGV(TAG, "[%s] Sent publish successful, msg_id=%d", __func__, msg_id);
+  ESP_LOGD(TAG, "[%s] Published current status", __func__);
   if (payload_str)
     cJSON_free(payload_str);
   if (payload)
@@ -370,7 +415,10 @@ esp_err_t mqttworker_init(QueueHandle_t free_chunk_queue, QueueHandle_t filled_c
   esp_mqtt_client_register_event(client, MQTT_EVENT_DATA, mqtt_data_handler, NULL);
   /* Get the event loop handles */
   /// TODO:  Check for errors
-  rec_eventloop_get_handle(&rec_event_h);
+  ESP_RETURN_ON_ERROR(conf_eventloop_get_handle(&conf_event_h), TAG,
+                      "Couldn't get the configuration event loop handle");
+  ESP_RETURN_ON_ERROR(rec_eventloop_get_handle(&rec_event_h), TAG,
+                      "Couldn't get the recording event loop handle");
   handler_conf.mqtt_client = client;
   strlcpy(handler_conf.thing_name, mqtt_cert_data.thing_name, sizeof(handler_conf.thing_name));
   ESP_RETURN_ON_ERROR(esp_event_handler_instance_register_with(
