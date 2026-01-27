@@ -172,9 +172,10 @@ cleanup:
 }  // end file_get_stream
 
 static esp_err_t jobs_update_job_status(char *job_id, job_status_t new_status, char *client_token,
-                                        char *thing_name) {
+                                        char *thing_name, char *status_details) {
   esp_err_t ret         = ESP_OK;
   cJSON    *payload     = cJSON_CreateObject();
+  cJSON    *status_json = NULL;
   char     *payload_str = NULL;
   char      topic_name[1024];
 
@@ -191,16 +192,10 @@ static esp_err_t jobs_update_job_status(char *job_id, job_status_t new_status, c
   cJSON_AddStringToObject(payload, "status", job_status_str[new_status]);
 
   /// TODO: statusDetails to include information about status update
-  /*
-  if (status_details_json && status_details_json[0] != '\0') {
-    cJSON *details = cJSON_Parse(status_details_json);
-    ESP_GOTO_ON_FALSE(details != NULL, ESP_ERR_INVALID_ARG, cleanup, TAG,
-                      "Couldn't parse status_details_json");
-    ESP_GOTO_ON_FALSE(cJSON_IsObject(details), ESP_ERR_INVALID_ARG, cleanup, TAG,
-                      "status_details_json must be a JSON object");
-    cJSON_AddItemToObject(payload, "statusDetails", details);  // payload now owns details
+  if (status_details && (status_details[0] != '\0')) {
+    status_json = cJSON_AddObjectToObject(payload, "statusDetails");
+    cJSON_AddStringToObject(status_json, "message", status_details);
   }
-  */
 
   ESP_GOTO_ON_FALSE(NULL != (payload_str = cJSON_Print(payload)), ESP_FAIL, cleanup, TAG,
                     "Couldn't print the payload to payload_str");
@@ -397,7 +392,8 @@ cleanup:
 static void ota_job_rejected_handler(void *handler_arg, esp_event_base_t event_base,
                                      int32_t event_id, void *event_data) {
   ESP_LOGW(TAG, "OTA Update rejected by OTA Manager, aborting");
-  jobs_update_job_status(ota_stream.job_id, REJECTED, "updateJob", ota_stream.thing_name);
+  jobs_update_job_status(ota_stream.job_id, REJECTED, "updateJob", ota_stream.thing_name,
+                         "OTA rejected");
   /// TODO: Mark the AWS Job as failed and include reason.
 }
 
@@ -411,7 +407,9 @@ static void ota_job_end_handler(void *handler_arg, esp_event_base_t event_base, 
   /// OTA partition has been written and tested.
   ota_result_t *ota_res = (ota_result_t *)event_data;
   jobs_update_job_status(ota_res->job_id, (ota_res->err_code == ESP_OK) ? SUCCEEDED : FAILED,
-                         "updateJob", ota_res->thing_name);
+                         "updateJob", ota_res->thing_name,
+                         (ota_res->err_code == ESP_OK) ? "Firmware written to flash"
+                                                       : ota_res->detail);
 }
 
 /*================== FreeRTOS Tasks ==================*/
@@ -419,9 +417,10 @@ void download_task(void *arg) {
   ota_chunk_t  curr_chunk = {0};
   esp_err_t    ret;
   int          block_n;
-  get_stream_t get_conf    = {0};
-  data_block_t data_block  = {0};
-  int          get_retries = 0;
+  get_stream_t get_conf           = {0};
+  data_block_t data_block         = {0};
+  int          get_retries        = 0;
+  char         status_string[256] = "";
 
   // Subscribe to relevant topics
   char topic_name[512];
@@ -435,7 +434,8 @@ void download_task(void *arg) {
                     TAG, "Failed subscribing to stream description rejected topic");
 
   // Update the Job status
-  jobs_update_job_status(ota_stream.job_id, IN_PROGRESS, "updateJob", ota_stream.thing_name);
+  jobs_update_job_status(ota_stream.job_id, IN_PROGRESS, "updateJob", ota_stream.thing_name,
+                         "started downloading");
 
   // Initialize the hashing context
   ESP_LOGD(TAG, "Initializing SHA256 hashing context...");
@@ -546,6 +546,10 @@ void download_task(void *arg) {
     }
     ESP_LOGV(TAG, "Sending chunk %d to the OTA Manager", i);
     xQueueSendToBack(s_filled_chunk_q, &curr_chunk, portMAX_DELAY);
+    snprintf(status_string, sizeof(status_string), "Downloading firmware %.0f%%",
+             100.0 * (double)(CONFIG_DATA_BLOCK_COUNT * i) / (double)block_n);
+    jobs_update_job_status(ota_stream.job_id, IN_PROGRESS, "updateJob", ota_stream.thing_name,
+                           status_string);
     memset(&curr_chunk, 0, sizeof(ota_chunk_t));
     // Get next OTA chunk
     while (xQueueReceive(s_free_chunk_q, &curr_chunk, portMAX_DELAY) != pdTRUE) {
