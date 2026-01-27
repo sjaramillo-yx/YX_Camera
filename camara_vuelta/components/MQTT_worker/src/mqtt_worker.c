@@ -400,6 +400,10 @@ esp_err_t mqttworker_check_for_jobs() {
 }
 
 esp_err_t mqttworker_configure_tcp_keep_alive(int idle_s, int interval_s, int retries) {
+  int old_idle    = mqtt_cfg.network.tcp_keep_alive_cfg.keep_alive_idle;
+  int old_inteval = mqtt_cfg.network.tcp_keep_alive_cfg.keep_alive_interval;
+  int old_retries = mqtt_cfg.network.tcp_keep_alive_cfg.keep_alive_count;
+
   if (client != NULL) {
     ESP_RETURN_ON_ERROR(esp_mqtt_client_stop(client), TAG, "Failed stopping the MQTT client");
     ESP_RETURN_ON_ERROR(esp_mqtt_client_destroy(client), TAG, "Failed destroying the MQTT client");
@@ -409,6 +413,16 @@ esp_err_t mqttworker_configure_tcp_keep_alive(int idle_s, int interval_s, int re
   mqtt_cfg.network.tcp_keep_alive_cfg.keep_alive_count    = retries;
 
   client = esp_mqtt_client_init(&mqtt_cfg);
+  if (client == NULL) {
+    ESP_LOGE(TAG, "Failed configuring the MQTT client with new TCP values, rolling back");
+    mqtt_cfg.network.tcp_keep_alive_cfg.keep_alive_idle     = old_idle;
+    mqtt_cfg.network.tcp_keep_alive_cfg.keep_alive_interval = old_inteval;
+    mqtt_cfg.network.tcp_keep_alive_cfg.keep_alive_count    = old_retries;
+    client                                                  = esp_mqtt_client_init(&mqtt_cfg);
+    esp_mqtt_client_start(client);
+    return ESP_ERR_INVALID_ARG;
+  }
+
   return esp_mqtt_client_start(client);
 }
 
