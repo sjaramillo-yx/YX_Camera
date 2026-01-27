@@ -76,6 +76,7 @@ static void publish_status_callback(TimerHandle_t xTimer) {
 }
 /*======================================== FreeRTOS Tasks ========================================*/
 static void mqtt_configure_task(void *args) {
+  /// NOTE: This task exists only because a bigger stack is needed to reconfigure the TCP layer.
   esp_err_t err = ESP_OK;
   while (true) {
     ulTaskNotifyTake(false, portMAX_DELAY);
@@ -174,6 +175,22 @@ static void conf_received_handler(void *handler_arg, esp_event_base_t event_base
              "TCP values outside limits. Must be greater than %d and lower than %d.", 0, 256);
     goto rejected;
   }
+
+  ////////////////////////
+  // SD Card free space //
+  ////////////////////////
+  if (0 < conf->min_sd_free_space_kb && conf->min_sd_free_space_kb < (8ULL << 20)) {
+    ESP_LOGD(TAG, "Setting minimum free space in SD card to %d KB", conf->min_sd_free_space_kb);
+    sdman_set_free_space_target(conf->min_sd_free_space_kb);
+  } else {
+    /// NOTE: This limits the maximum value to 20 GB, but it would be wiser to use SD card size.
+    snprintf(
+        error_msg, sizeof(error_msg),
+        "SD minimum free space value outside limits. Must be greater than %d and lower than %llu.",
+        0, (8ULL << 20));
+    goto rejected;
+  }
+
 rejected:
   /// TODO: Post CONF_REJECTED event
   return;
@@ -198,7 +215,7 @@ void app_main(void) {
   esp_log_level_set("S3Uploader", ESP_LOG_INFO);
   esp_log_level_set("NVS Manager", ESP_LOG_INFO);
   esp_log_level_set("Video Manager", ESP_LOG_INFO);
-  esp_log_level_set("SDManager", ESP_LOG_INFO);
+  esp_log_level_set("SDManager", ESP_LOG_DEBUG);
   esp_log_level_set("OTAManager", ESP_LOG_DEBUG);
   esp_log_level_set("HTTPHelpers", ESP_LOG_INFO);
   esp_log_level_set("AWSJobsManager", ESP_LOG_DEBUG);

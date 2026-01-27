@@ -89,6 +89,18 @@ esp_err_t sdman_write_bytes(char *data, long long int len, FILE *fp);
  */
 esp_err_t sdman_getJSON(cJSON **sdJSON);
 
+/**
+ * @brief Notify the oldest video scan task to run.
+ */
+esp_err_t sdman_notify_oldest_video_scan_task(void);
+
+/**
+ * @brief Set the target free space for the SD Card
+ *
+ * @param free_kb Minimum free space on card in KB.
+ */
+esp_err_t sdman_set_free_space_target(uint64_t free_kb);
+
 #ifdef __cplusplus
 }
 #endif

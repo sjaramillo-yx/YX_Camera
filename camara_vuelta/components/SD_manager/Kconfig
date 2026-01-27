@@ -4,6 +4,12 @@ menu "SD Card Manager"
   string "VFS Mountpoint for SD Card"
   default "/sdcard"
 
+  config SD_CARD_DEFAULT_MIN_FREE_KB
+    int "Minimum free space in SD card on mount, in Kilo Bytes"
+    default  1
+    help 
+      A small number is recommended here as default, if you need bigger values configure them via the configuration MQTT topic.
+
   menu "GPIOs"
       config PIN_CLK
       int "CLK"
