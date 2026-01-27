@@ -213,21 +213,21 @@ static void update_sensor_color_config(const esp_cam_sensor_device_t *dev) {
   bool        is_raw10    = format_name && strstr(format_name, "RAW10");
 
   if (is_raw8) {
-    csi_cfg.input_data_color_type  = CAM_CTLR_COLOR_RAW8;
+    csi_cfg.input_data_color_type    = CAM_CTLR_COLOR_RAW8;
     isp_config.input_data_color_type = ISP_COLOR_RAW8;
     ESP_LOGI(TAG, "Configured sensor format %s as RAW8 input", format_name);
     return;
   }
 
   if (is_raw10 || format_name) {
-    csi_cfg.input_data_color_type  = CAM_CTLR_COLOR_RAW10;
+    csi_cfg.input_data_color_type    = CAM_CTLR_COLOR_RAW10;
     isp_config.input_data_color_type = ISP_COLOR_RAW10;
     ESP_LOGI(TAG, "Configured sensor format %s as RAW10 input", format_name ? format_name : "n/a");
     return;
   }
 
   ESP_LOGW(TAG, "Unknown sensor format, defaulting to RAW10 input");
-  csi_cfg.input_data_color_type  = CAM_CTLR_COLOR_RAW10;
+  csi_cfg.input_data_color_type    = CAM_CTLR_COLOR_RAW10;
   isp_config.input_data_color_type = ISP_COLOR_RAW10;
 }
 
@@ -772,7 +772,7 @@ static void vman_rec_handler(void *handler_arg, esp_event_base_t event_base, int
     // Use the true configured parameters
     rec_conf.fps            = s_output_fps;
     rec_conf.target_bitrate = enc_cfg.rc.bitrate;
-    strncpy(rec_file.transaction_id, rec_conf.transaction_id, sizeof(rec_file.transaction_id) - 1);
+    strlcpy(rec_file.transaction_id, rec_conf.transaction_id, sizeof(rec_file.transaction_id));
     rec_file.transaction_id[sizeof(rec_file.transaction_id) - 1] = '\0';
     esp_event_post_to(rec_event_h, RECORDING_EVENTS, REC_STARTED, (void *)&rec_conf,
                       sizeof(rec_conf), 100);
@@ -794,6 +794,8 @@ static void vman_rec_handler(void *handler_arg, esp_event_base_t event_base, int
       break;
     }
     if ((rec_error.error_code = vman_stop_recording()) == ESP_OK) {
+      rec_file.hres = rec_conf.hres;
+      rec_file.vres = rec_conf.vres;
       esp_event_post_to(rec_event_h, RECORDING_EVENTS, REC_DONE, (void *)&rec_file,
                         sizeof(rec_file), 100);
     } else {
