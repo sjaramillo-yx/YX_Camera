@@ -268,6 +268,8 @@ void app_main(void) {
   // Create the status timer
   /// TODO: Turn defaults into KConfig options
   status_timer_h = xTimerCreate("status.timer", 30000, true, NULL, publish_status_callback);
+  status_timer_h =
+      xTimerCreate("status.timer", pdMS_TO_TICKS(30000), true, NULL, publish_status_callback);
   xTimerStart(status_timer_h, portMAX_DELAY);
 }  // end app_main
 
