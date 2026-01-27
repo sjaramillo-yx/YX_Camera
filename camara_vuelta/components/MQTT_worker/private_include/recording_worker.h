@@ -17,6 +17,7 @@
 #include <mqtt_client.h>
 /* Standard includes*/
 #include <cJSON.h>
+#include <sys/time.h>
 /* FreeRTOS includes*/
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
@@ -28,6 +29,11 @@
 extern "C" {
 #endif
 
+typedef struct rec_handler_conf_t {
+  char                     thing_name[128];
+  esp_mqtt_client_handle_t mqtt_client;
+} rec_handler_conf_t;
+
 /**
  * @brief Parse a recording start command and write the corresponding `recording_conf_t` object
  * fields.
@@ -37,6 +43,24 @@ extern "C" {
  * will be saved. Can't be `NULL`.
  */
 esp_err_t parse_recording_start(cJSON *payload, recording_conf_t *out_rec_conf);
+
+/**
+ * @brief The event handler for the `REC_STARTED` event.
+ */
+void rec_started_handler(void *handler_arg, esp_event_base_t event_base, int32_t event_id,
+                         void *event_data);
+
+/**
+ * @brief The event handler for the `REC_DONE` event.
+ */
+void rec_done_handler(void *handler_arg, esp_event_base_t event_base, int32_t event_id,
+                      void *event_data);
+
+/**
+ * @brief The event handler for the `REC_ERROR` event.
+ */
+void rec_error_handler(void *handler_arg, esp_event_base_t event_base, int32_t event_id,
+                       void *event_data);
 
 #ifdef __cplusplus
 }

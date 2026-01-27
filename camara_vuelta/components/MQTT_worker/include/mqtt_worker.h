@@ -18,7 +18,6 @@
 #include <mqtt_client.h>
 /* Standard includes*/
 #include <cJSON.h>
-#include <sys/time.h>
 /* FreeRTOS includes*/
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>

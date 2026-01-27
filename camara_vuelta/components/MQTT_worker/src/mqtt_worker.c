@@ -55,9 +55,13 @@ static esp_mqtt_client_config_t mqtt_cfg = {
 static SemaphoreHandle_t mqtt_conn_semphr = NULL;
 
 /**
- * @brief The recording events handler
+ * @brief The recording events handlers
  */
+esp_event_handler_instance_t rec_started_handler_h;
+esp_event_handler_instance_t rec_done_handler_h;
 esp_event_handler_instance_t rec_handler_h;
+
+rec_handler_conf_t handler_conf;
 
 static bool jobs_checked = false;
 
@@ -72,7 +76,7 @@ static bool jobs_checked = false;
  */
 static void mqtt_connected_handler(void *handler_args, esp_event_base_t base, int32_t event_id,
                                    void *event_data) {
-  ESP_LOGD(TAG, "Connected to MQTT broker");
+  ESP_LOGI(TAG, "Connected to MQTT broker");
   esp_mqtt_event_handle_t  event            = event_data;
   esp_mqtt_client_handle_t client           = event->client;
   char                     topic_name[1024] = "";
@@ -202,100 +206,9 @@ cleanup:
   }
 }
 
-static void mqttworker_rec_handler(void *handler_arg, esp_event_base_t event_base, int32_t event_id,
-                                   void *event_data) {
-  ESP_LOGI(TAG, "Received event %s:%d", (char *)event_base, event_id);
-  recording_conf_t  *vman_rec_params;
-  recording_file_t  *vman_rec_file;
-  recording_error_t *vman_rec_error;
-  cJSON             *payload = cJSON_CreateObject();
-  char              *payload_str;
-  cJSON             *qps;
-  cJSON             *res;
-  char               topic_name[1024] = "";
-  int                msg_id;
-  switch (event_id) {
-  case REC_STARTED:
-    vman_rec_params = (recording_conf_t *)event_data;
-    ESP_LOGI(TAG, "Video Manager started recording with ID %s", vman_rec_params->transaction_id);
-    qps = cJSON_AddArrayToObject(payload, "QPs");
-    res = cJSON_AddArrayToObject(payload, "resolution");
-    cJSON_AddStringToObject(payload, "status", "STARTED");
-    cJSON_AddStringToObject(payload, "transactionId", vman_rec_params->transaction_id);
-    cJSON_AddItemToArray(qps, cJSON_CreateNumber(vman_rec_params->qp_min));
-    cJSON_AddItemToArray(qps, cJSON_CreateNumber(vman_rec_params->qp_max));
-    cJSON_AddItemToArray(res, cJSON_CreateNumber(vman_rec_params->hres));
-    cJSON_AddItemToArray(res, cJSON_CreateNumber(vman_rec_params->vres));
-    cJSON_AddNumberToObject(payload, "targetFps", vman_rec_params->fps);
-    cJSON_AddNumberToObject(payload, "targetBitrate", vman_rec_params->target_bitrate);
-    cJSON_AddNumberToObject(payload, "timeout", vman_rec_params->timeout_seconds);
-    snprintf(topic_name, sizeof(topic_name),
-             CONFIG_PROJ_BASE_NAME "/" CONFIG_PROJ_ENV_NAME "/recordings/%s/%s/status",
-             mqtt_cert_data.thing_name, rec_conf.transaction_id);
-    topic_name[sizeof(topic_name) - 1] = '\0';
-    payload_str                        = cJSON_Print(payload);
-    msg_id = esp_mqtt_client_publish(client, topic_name, payload_str, 0, 1, 0);
-    if (payload_str)
-      cJSON_free(payload_str);
-    ESP_LOGD(TAG, "sent publish successful, msg_id=%d", msg_id);
-    break;
-
-  case REC_DONE:
-    vman_rec_file = (recording_file_t *)event_data;
-    cJSON_AddStringToObject(payload, "status", "DONE");
-    cJSON_AddStringToObject(payload, "transactionId", rec_conf.transaction_id);
-    res = cJSON_AddArrayToObject(payload, "resolution");
-    cJSON_AddItemToArray(res, cJSON_CreateNumber(rec_conf.hres));
-    cJSON_AddItemToArray(res, cJSON_CreateNumber(rec_conf.vres));
-    cJSON_AddStringToObject(payload, "filename", vman_rec_file->filename);
-    cJSON_AddNumberToObject(payload, "filesize", vman_rec_file->size);
-    cJSON_AddNumberToObject(payload, "recordedSeconds", vman_rec_file->recorded_seconds);
-    snprintf(topic_name, 1024,
-             CONFIG_PROJ_BASE_NAME "/" CONFIG_PROJ_ENV_NAME "/recordings/%s/%s/status",
-             mqtt_cert_data.thing_name, rec_conf.transaction_id);
-    payload_str = cJSON_Print(payload);
-    msg_id      = esp_mqtt_client_publish(client, topic_name, payload_str, 0, 1, 0);
-    if (payload_str)
-      cJSON_free(payload_str);
-    ESP_LOGD(TAG, "sent publish successful, msg_id=%d", msg_id);
-    // Unsubscribe from the recording topic
-    esp_mqtt_client_unsubscribe(client, topic_name);
-    break;
-
-  case REC_ERROR:
-    vman_rec_error = (recording_error_t *)event_data;
-    ESP_LOGI(TAG, "Module %s reported error 0x%02x (%s)", vman_rec_error->errored_module,
-             vman_rec_error->error_code, vman_rec_error->error_message);
-    struct timeval system_time;
-    gettimeofday(&system_time, NULL);
-    cJSON_AddStringToObject(payload, "status", "ERROR");
-    cJSON_AddStringToObject(payload, "thingName", mqtt_cert_data.thing_name);
-    cJSON_AddStringToObject(payload, "errorCode", esp_err_to_name(vman_rec_error->error_code));
-    cJSON_AddStringToObject(payload, "errorMessage", vman_rec_error->error_message);
-    cJSON_AddStringToObject(payload, "errorOrigin", vman_rec_error->errored_module);
-    cJSON_AddNumberToObject(payload, "timestamp", (uint64_t)system_time.tv_sec);
-    payload_str = cJSON_Print(payload);
-    if (strcmp(vman_rec_error->transaction_id, "")) {
-      snprintf(topic_name, 1024,
-               CONFIG_PROJ_BASE_NAME "/" CONFIG_PROJ_ENV_NAME "/recordings/%s/%s/status",
-               mqtt_cert_data.thing_name, vman_rec_error->transaction_id);
-    } else {
-      strncpy(topic_name, CONFIG_PROJ_BASE_NAME "/" CONFIG_PROJ_ENV_NAME "/cameras/error",
-              sizeof(topic_name));
-    }
-    msg_id = esp_mqtt_client_publish(client, topic_name, payload_str, 0, 1, 0);
-    if (payload_str)
-      cJSON_free(payload_str);
-    ESP_LOGD(TAG, "sent publish successful, msg_id=%d", msg_id);
-    break;
-  }
-  if (payload)
-    cJSON_Delete(payload);
-}
-
 /*================== Statics ==================*/
-/*
 /// TODO: Receive a pointer to a certificate string or use the mqtt client conf
+/*
 static esp_err_t mqttworker_verify_flash_certs(void) {
   int                ret = ESP_OK;
   mbedtls_x509_crt   client;
@@ -449,7 +362,6 @@ esp_err_t mqttworker_init(QueueHandle_t free_chunk_queue, QueueHandle_t filled_c
   /// TODO: Catch other errors
   err = nvsman_get_certs(&mqtt_cert_data);
   ESP_LOGD(TAG, "ThingName is %s", mqtt_cert_data.thing_name);
-  ESP_LOGD(TAG, "OTA certificate is %s", mqtt_cert_data.ota_key);
   mqtt_cfg.credentials.client_id = (const char *)mqtt_cert_data.thing_name;
   client                         = esp_mqtt_client_init(&mqtt_cfg);
 
@@ -459,10 +371,20 @@ esp_err_t mqttworker_init(QueueHandle_t free_chunk_queue, QueueHandle_t filled_c
   /* Get the event loop handles */
   /// TODO:  Check for errors
   rec_eventloop_get_handle(&rec_event_h);
-  ESP_RETURN_ON_ERROR(
-      esp_event_handler_instance_register_with(rec_event_h, RECORDING_EVENTS, ESP_EVENT_ANY_ID,
-                                               mqttworker_rec_handler, NULL, &rec_handler_h),
-      TAG, "Couldn't register recording events handler");
+  handler_conf.mqtt_client = client;
+  strlcpy(handler_conf.thing_name, mqtt_cert_data.thing_name, sizeof(handler_conf.thing_name));
+  ESP_RETURN_ON_ERROR(esp_event_handler_instance_register_with(
+                          rec_event_h, RECORDING_EVENTS, REC_STARTED, rec_started_handler,
+                          &handler_conf, &rec_started_handler_h),
+                      TAG, "Couldn't register recording started event handler");
+  ESP_RETURN_ON_ERROR(esp_event_handler_instance_register_with(rec_event_h, RECORDING_EVENTS,
+                                                               REC_DONE, rec_done_handler,
+                                                               &handler_conf, &rec_done_handler_h),
+                      TAG, "Couldn't register recording done event handler");
+  ESP_RETURN_ON_ERROR(esp_event_handler_instance_register_with(rec_event_h, RECORDING_EVENTS,
+                                                               REC_ERROR, rec_error_handler,
+                                                               &handler_conf, &rec_handler_h),
+                      TAG, "Couldn't register recording error event handler");
   /* Initialize the jobs manager */
   ESP_RETURN_ON_ERROR(
       jobs_init(client, mqtt_cert_data.ota_key, free_chunk_queue, filled_chunk_queue), TAG,
