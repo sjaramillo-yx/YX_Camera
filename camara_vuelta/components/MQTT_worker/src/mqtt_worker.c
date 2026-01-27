@@ -49,9 +49,18 @@ static esp_mqtt_client_handle_t client = NULL;
  * @brief The MQTT client configuration
  */
 static esp_mqtt_client_config_t mqtt_cfg = {
-    /// TODO: Make this URL configurable in KConfig
     .broker.address.uri = "mqtts://" CONFIG_AWS_ENDPOINT ":8883",
-    .buffer             = {.size = 8192, .out_size = 8192}};
+    /// TODO: Make buffer sizes configurable in KConfig
+    .buffer = {.size = 8192, .out_size = 8192},
+    /// TODO: Make defaults configurable in KConfig
+    .network.tcp_keep_alive_cfg =
+        {
+            .keep_alive_enable   = true,
+            .keep_alive_idle     = 45,
+            .keep_alive_interval = 10,
+            .keep_alive_count    = 4,
+        },
+};
 
 /**
  * @brief The connected semaphore
@@ -220,7 +229,9 @@ static void mqtt_data_handler(void *handler_args, esp_event_base_t base, int32_t
     // Check that the formatting is correct
     if (!cJSON_IsNumber(cJSON_GetObjectItem(payload, "status_period_ms")) ||
         !cJSON_IsNumber(cJSON_GetObjectItem(payload, "min_sd_free_space_kb")) ||
-        !cJSON_IsNumber(cJSON_GetObjectItem(payload, "keep_alive_period_ms"))) {
+        !cJSON_IsNumber(cJSON_GetObjectItem(payload, "tcp_keep_alive_idle_s")) ||
+        !cJSON_IsNumber(cJSON_GetObjectItem(payload, "tcp_keep_alive_interval_s")) ||
+        !cJSON_IsNumber(cJSON_GetObjectItem(payload, "tcp_keep_alive_retries"))) {
       ESP_LOGW(TAG, "Invalid payload format");
       goto cleanup;
     }
@@ -232,8 +243,12 @@ static void mqtt_data_handler(void *handler_args, esp_event_base_t base, int32_t
         cJSON_GetNumberValue(cJSON_GetObjectItem(payload, "status_period_ms"));
     cam_conf.min_sd_free_space_kb =
         cJSON_GetNumberValue(cJSON_GetObjectItem(payload, "min_sd_free_space_kb"));
-    cam_conf.keep_alive_period_ms =
-        cJSON_GetNumberValue(cJSON_GetObjectItem(payload, "keep_alive_period_ms"));
+    cam_conf.tcp_keep_alive_idle_s =
+        cJSON_GetNumberValue(cJSON_GetObjectItem(payload, "tcp_keep_alive_idle_s"));
+    cam_conf.tcp_keep_alive_interval_s =
+        cJSON_GetNumberValue(cJSON_GetObjectItem(payload, "tcp_keep_alive_interval_s"));
+    cam_conf.tcp_keep_alive_retries =
+        cJSON_GetNumberValue(cJSON_GetObjectItem(payload, "tcp_keep_alive_retries"));
     // Publish the configuration event
     //// TODO: Remove portMAX_DELAY and fail accordingly
     esp_event_post_to(conf_event_h, CONFIGURATION_EVENTS, CONF_RECEIVED, &cam_conf,
@@ -338,8 +353,10 @@ esp_err_t mqttworker_publish_current_state(cJSON *sdJSON, bool is_recording) {
   int msg_id  = esp_mqtt_client_publish(
       client, CONFIG_PROJ_BASE_NAME "/" CONFIG_PROJ_ENV_NAME "/cameras/status", payload_str, 0, 1,
       0);
-  ESP_LOGV(TAG, "[%s] Sent publish successful, msg_id=%d", __func__, msg_id);
-  ESP_LOGD(TAG, "[%s] Published current status", __func__);
+  if (msg_id >= 0) {
+    ESP_LOGV(TAG, "[%s] Sent publish successful, msg_id=%d", __func__, msg_id);
+    ESP_LOGD(TAG, "[%s] Published current status", __func__);
+  }
   if (payload_str)
     cJSON_free(payload_str);
   if (payload)
@@ -380,6 +397,19 @@ esp_err_t mqttworker_check_for_jobs() {
   jobs_get_pending(mqtt_cert_data.thing_name, "getJobs");
   jobs_checked = true;
   return ESP_OK;
+}
+
+esp_err_t mqttworker_configure_tcp_keep_alive(int idle_s, int interval_s, int retries) {
+  if (client != NULL) {
+    ESP_RETURN_ON_ERROR(esp_mqtt_client_stop(client), TAG, "Failed stopping the MQTT client");
+    ESP_RETURN_ON_ERROR(esp_mqtt_client_destroy(client), TAG, "Failed destroying the MQTT client");
+  }
+  mqtt_cfg.network.tcp_keep_alive_cfg.keep_alive_idle     = idle_s;
+  mqtt_cfg.network.tcp_keep_alive_cfg.keep_alive_interval = interval_s;
+  mqtt_cfg.network.tcp_keep_alive_cfg.keep_alive_count    = retries;
+
+  client = esp_mqtt_client_init(&mqtt_cfg);
+  return esp_mqtt_client_start(client);
 }
 
 /*================== Initalize, Begin, Stop and Deinitialize ==================*/
@@ -479,7 +509,7 @@ esp_err_t mqttworker_deinit(void) {
   ESP_RETURN_ON_ERROR(
       esp_mqtt_client_unregister_event(client, MQTT_EVENT_CONNECTED, mqtt_connected_handler), TAG,
       "Couldn't unregister MQTT connected handler");
-
+  ESP_RETURN_ON_ERROR(esp_mqtt_client_stop(client), TAG, "Couldn't stop the MQTT client");
   ESP_RETURN_ON_ERROR(esp_mqtt_client_destroy(client), TAG, "Couldn't destroy the MQTT client");
 
   return ESP_OK;

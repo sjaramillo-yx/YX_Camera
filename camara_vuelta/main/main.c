@@ -39,11 +39,14 @@ static esp_err_t ota_rec_retrieved;
 // Event loops
 static esp_event_loop_handle_t OTA_event_h;
 static esp_event_loop_handle_t conf_event_h;
-// Peripherals JSONs
+// Peripheral JSONs
 cJSON *sdJSON;
 cJSON *vmanJSON;
+// TCP Keep alive configurations
+static int          tcp_idle_s, tcp_interval_s, tcp_retries;
+static TaskHandle_t mqtt_conf_task_h;
 // Timers
-TimerHandle_t status_timer_h;
+static TimerHandle_t status_timer_h;
 
 /*======================================= Static Functions =======================================*/
 static esp_err_t main_test(char out_msg[128]) {
@@ -71,6 +74,22 @@ static void publish_status_callback(TimerHandle_t xTimer) {
     publish_rec_state();
   }  // end if
 }
+/*======================================== FreeRTOS Tasks ========================================*/
+static void mqtt_configure_task(void *args) {
+  esp_err_t err = ESP_OK;
+  while (true) {
+    ulTaskNotifyTake(false, portMAX_DELAY);
+    err = mqttworker_configure_tcp_keep_alive(tcp_idle_s, tcp_interval_s, tcp_retries);
+    if (err != ESP_OK) {
+      ESP_LOGE(TAG, "Couldn't configure TCP keep alive values (%s)", esp_err_to_name(err));
+      continue;
+    }
+    ESP_LOGI(TAG, "Set the TCP Keep Alive idle period to %ds", tcp_idle_s);
+    ESP_LOGI(TAG, "Set the TCP Keep Alive interval to %ds", tcp_interval_s);
+    ESP_LOGI(TAG, "Set the TCP Keep Alive retry count to %d ", tcp_retries);
+  }
+}
+
 /*======================================== Event Handlers ========================================*/
 static void ota_job_received_handler(void *handler_arg, esp_event_base_t event_base,
                                      int32_t event_id, void *event_data) {
@@ -115,7 +134,11 @@ static void conf_received_handler(void *handler_arg, esp_event_base_t event_base
   configuration_t *conf           = event_data;
   char             error_msg[256] = "";
   esp_err_t        ret            = ESP_OK;  // Necessary for ESP_GOTO macros
+
   /// TODO: Define upper and lower limits as KConfig options
+  ///////////////////////////
+  // Status message period //
+  ///////////////////////////
   if (0 < conf->status_period_ms && conf->status_period_ms < portMAX_DELAY) {
     ESP_LOGD(TAG, "Setting the status message period to %d ms", conf->status_period_ms);
     if (xTimerChangePeriod(status_timer_h, pdMS_TO_TICKS(conf->status_period_ms), portMAX_DELAY) !=
@@ -128,8 +151,27 @@ static void conf_received_handler(void *handler_arg, esp_event_base_t event_base
     ESP_LOGI(TAG, "New status message period is %d ms", conf->status_period_ms);
   } else {
     snprintf(error_msg, sizeof(error_msg),
-             "Status period outside of limits. Must be greater than %d and lower than %lu.", 0,
+             "Status period outside limits. Must be greater than %d and lower than %lu.", 0,
              portMAX_DELAY);
+    goto rejected;
+  }
+
+  /////////////////////////////////
+  // TCP configuration for MQTT //
+  /////////////////////////////////
+  if ((0 < conf->tcp_keep_alive_idle_s && conf->tcp_keep_alive_idle_s < 256) &&
+      (0 < conf->tcp_keep_alive_interval_s && conf->tcp_keep_alive_interval_s < 256) &&
+      (0 < conf->tcp_keep_alive_retries && conf->tcp_keep_alive_retries < 256)) {
+    ESP_LOGD(TAG, "Setting the TCP Keep Alive idle period to %ds", conf->tcp_keep_alive_idle_s);
+    ESP_LOGD(TAG, "Setting the TCP Keep Alive interval to %ds", conf->tcp_keep_alive_interval_s);
+    ESP_LOGD(TAG, "Setting the TCP Keep Alive retry count to %d", conf->tcp_keep_alive_retries);
+    tcp_idle_s     = conf->tcp_keep_alive_idle_s;
+    tcp_interval_s = conf->tcp_keep_alive_interval_s;
+    tcp_retries    = conf->tcp_keep_alive_retries;
+    xTaskNotifyGive(mqtt_conf_task_h);
+  } else {
+    snprintf(error_msg, sizeof(error_msg),
+             "TCP values outside limits. Must be greater than %d and lower than %d.", 0, 256);
     goto rejected;
   }
 rejected:
@@ -264,6 +306,12 @@ void app_main(void) {
   vman_getJSON(&vmanJSON);
   // Publish initial state
   hello_published = mqttworker_publish_initial_state(sdJSON, vmanJSON);  // Also frees cJSON memory
+
+  // Create the MQTT TCP Keep Alive configuration task
+  if (xTaskCreate(mqtt_configure_task, "mqtt.conf.task", 2048, NULL, 5, &mqtt_conf_task_h) !=
+      pdPASS) {
+    ESP_LOGE(TAG, "Couldn't create the MQTT TCP Keep Alive configuration task!");
+  }
 
   // Create the status timer
   /// TODO: Turn defaults into KConfig options

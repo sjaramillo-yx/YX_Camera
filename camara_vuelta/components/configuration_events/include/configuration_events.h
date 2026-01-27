@@ -37,9 +37,11 @@ typedef enum {
 } configuration_event_t;
 
 typedef struct configuration_t {
-  int status_period_ms;      // Period between camera status messages.
-  int min_sd_free_space_kb;  // Minimum space to keep free in SD Card, in KB.
-  int keep_alive_period_ms;  // Period between transport keep alive messages.
+  int status_period_ms;       // Period between camera status messages.
+  int min_sd_free_space_kb;   // Minimum space to keep free in SD Card, in KB.
+  int tcp_keep_alive_idle_s;  // Seconds the connection must idle before the first keep alive probe.
+  int tcp_keep_alive_interval_s;  // Time between keepalive probes if there’s no response.
+  int tcp_keep_alive_retries;     // How many failed probes before declaring the connection dead.
 } configuration_t;
 
 /**
