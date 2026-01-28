@@ -101,7 +101,7 @@ Resources:
       CodeSigningStack
     ]
     Properties:
-      TemplateURL: nested/OtaAdmin.yaml
+      TemplateURL: nested/otaAdmin.yaml
       Parameters:
         ParentStackName: !Select [0, !Split ["-", !Ref "AWS::StackName"]]
         Environment: !Ref Environment
@@ -138,3 +138,5 @@ Outputs:
     Value: !Ref CameraDataBucket
   CameraDataBucketArn:
     Value: !GetAtt CameraDataBucket.Arn
+  CodeSigningCertificateArn:
+    Value: !GetAtt CodeSigningStack.Outputs.CodeSigningCertificateArn
