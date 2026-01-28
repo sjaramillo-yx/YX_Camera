@@ -49,6 +49,11 @@ static esp_err_t nvsman_retrieve_provisioning_certs() {
   ESP_GOTO_ON_FALSE(len < sizeof(cert_data.root_ca), ESP_ERR_NO_MEM, cleanup, TAG,
                     "Root CA is too long!");
   ret = nvs_get_str(certs_handle, "root_ca", cert_data.root_ca, &len);
+  ESP_LOGD(TAG, "Searching for OTA codesign cert");
+  ret = nvs_get_str(certs_handle, "ota_key", NULL, &len);  // Query the length of the string
+  ESP_GOTO_ON_FALSE(len < sizeof(cert_data.ota_key), ESP_ERR_NO_MEM, cleanup, TAG,
+                    "OTA codesign public key is too long!");
+  ret = nvs_get_str(certs_handle, "ota_key", cert_data.ota_key, &len);
 
   strlcpy(cert_data.cert_id, "provisioning", sizeof(cert_data.cert_id));
   cert_data.populated = true;
@@ -100,6 +105,11 @@ static esp_err_t nvsman_retreive_certs() {
   ESP_GOTO_ON_FALSE(len < sizeof(cert_data.thing_name), ESP_ERR_NO_MEM, cleanup, TAG,
                     "ThingName is too long!");
   ret = nvs_get_str(certs_handle, "thing_name", cert_data.thing_name, &len);
+  ESP_LOGD(TAG, "Searching for OTA codesign cert");
+  ret = nvs_get_str(certs_handle, "ota_key", NULL, &len);  // Query the length of the string
+  ESP_GOTO_ON_FALSE(len < sizeof(cert_data.ota_key), ESP_ERR_NO_MEM, cleanup, TAG,
+                    "OTA codesign public key is too long!");
+  ret = nvs_get_str(certs_handle, "ota_key", cert_data.ota_key, &len);
 
   /// TODO: Goto tag for cleanup instead of if/else
   ESP_LOGD(TAG, "Certificate correctly retreived from NVS");
@@ -136,6 +146,8 @@ esp_err_t nvsman_save_certs(cert_data_t *new_certs) {
                       "Couldn't write certificate ID");
   ESP_RETURN_ON_ERROR(nvs_set_str(certs_handle, "thing_name", new_certs->thing_name), TAG,
                       "Couldn't write ThingName");
+  ESP_RETURN_ON_ERROR(nvs_set_str(certs_handle, "ota_key", new_certs->ota_key), TAG,
+                      "Couldn't write OTA codesign public key");
 
   // Commit
   ret = nvs_commit(certs_handle);

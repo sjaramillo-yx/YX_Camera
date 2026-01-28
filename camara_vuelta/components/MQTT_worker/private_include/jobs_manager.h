@@ -63,14 +63,23 @@ esp_err_t jobs_data_handler(const char *thing_name, const char *data, int data_l
 esp_err_t jobs_stream_data_handler(const char *thing_name, const char *data, int data_len);
 
 /**
+ * @brief Update the MQTT client handle used in this module.
+ *
+ * @todo Make all functions receive the mqtt client as an argument and all handlers receive the mqtt
+ * client as part of the context or arguments.
+ */
+void jobs_update_mqtt_client(esp_mqtt_client_handle_t new_client);
+
+/**
  * @brief Initialize AWSJobsManager.
  *
  * @param client The MQTT client used to communicate with AWS.
+ * @param codesign_certificate The OTA codesigning certificate string.
  * @param free_chunk_queue The queue used to receive free chunks from the OTA Manager
  * @param filled_chunk_queue The queue to send filled chunks to the OTA Manager
  */
-esp_err_t jobs_init(esp_mqtt_client_handle_t client, QueueHandle_t free_chunk_queue,
-                    QueueHandle_t filled_chunk_queue);
+esp_err_t jobs_init(esp_mqtt_client_handle_t client, char *codesign_certificate,
+                    QueueHandle_t free_chunk_queue, QueueHandle_t filled_chunk_queue);
 
 /**
  * @brief Deinitialize the AWSJobsManager.

@@ -12,6 +12,7 @@ project(camara_vuelta)
 set(_cert_path "${CONFIG_AWS_IOT_CERT_PEM_PATH}")
 set(_key_path  "${CONFIG_AWS_IOT_PRIV_KEY_PATH}")
 set(_ca_path   "${CONFIG_AWS_IOT_ROOT_CA_PATH}")
+set(_ota_path  "${CONFIG_AWS_IOT_OTA_PUB_KEY_PATH}")
 
 if(_cert_path STREQUAL "")
   set(_cert_path "$ENV{AWS_IOT_CERT_PEM_PATH}")
@@ -22,17 +23,21 @@ endif()
 if(_ca_path STREQUAL "")
   set(_ca_path "$ENV{AWS_IOT_ROOT_CA_PATH}")
 endif()
+if(_ota_path STREQUAL "")
+  set(_ota_path "$ENV{AWS_IOT_OTA_PUB_KEY_PATH}")
+endif()
 
-if(_cert_path STREQUAL "" OR _key_path STREQUAL "" OR _ca_path STREQUAL "")
+if(_cert_path STREQUAL "" OR _key_path STREQUAL "" OR _ca_path STREQUAL "" OR _ota_path STREQUAL "")
   message(STATUS
     "AWS IoT cert paths not set yet; skipping certs partition generation. "
-    "Run 'idf.py menuconfig' (or set env vars AWS_IOT_CERT_PEM_PATH/AWS_IOT_PRIV_KEY_PATH/AWS_IOT_ROOT_CA_PATH)."
+    "Run 'idf.py menuconfig' (or set env vars AWS_IOT_CERT_PEM_PATH/AWS_IOT_PRIV_KEY_PATH/AWS_IOT_ROOT_CA_PATH/AWS_IOT_OTA_PUB_KEY_PATH)."
   )
 else()
   # Convert to absolute paths to avoid working-directory surprises
-  get_filename_component(AWS_IOT_CERT_PEM "${_cert_path}" ABSOLUTE BASE_DIR "${CMAKE_SOURCE_DIR}")
-  get_filename_component(AWS_IOT_PRIV_KEY "${_key_path}" ABSOLUTE BASE_DIR "${CMAKE_SOURCE_DIR}")
-  get_filename_component(AWS_IOT_ROOT_CA  "${_ca_path}"  ABSOLUTE BASE_DIR "${CMAKE_SOURCE_DIR}")
+  get_filename_component(AWS_IOT_CERT_PEM          "${_cert_path}" ABSOLUTE BASE_DIR "${CMAKE_SOURCE_DIR}")
+  get_filename_component(AWS_IOT_PRIV_KEY          "${_key_path}"  ABSOLUTE BASE_DIR "${CMAKE_SOURCE_DIR}")
+  get_filename_component(AWS_IOT_ROOT_CA           "${_ca_path}"   ABSOLUTE BASE_DIR "${CMAKE_SOURCE_DIR}")
+  get_filename_component(AWS_IOT_OTA_PUB_KEY       "${_ota_path}"  ABSOLUTE BASE_DIR "${CMAKE_SOURCE_DIR}")
 
   set(GEN_CSV "${CMAKE_BINARY_DIR}/certificates.csv")
   configure_file("${CMAKE_SOURCE_DIR}/certificates.csv" "${GEN_CSV}" @ONLY)

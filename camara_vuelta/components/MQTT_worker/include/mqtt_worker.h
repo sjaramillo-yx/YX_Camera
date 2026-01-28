@@ -18,7 +18,6 @@
 #include <mqtt_client.h>
 /* Standard includes*/
 #include <cJSON.h>
-#include <sys/time.h>
 /* FreeRTOS includes*/
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
@@ -57,11 +56,16 @@ esp_err_t mqttworker_publish_initial_state(cJSON *sdJSON, cJSON *vmanJSON);
 
 /**
  * @brief Publish current state information to AWS
+ *
+ * @param sdJSON A `cJSON` object that contains information about the SD Card.
+ * @param is_recording A `bool` indicating wether the camera is currently recording or not.
  */
 esp_err_t mqttworker_publish_current_state(cJSON *sdJSON, bool is_recording);
 
 /**
  * @brief Publish ongoing recording state information to AWS
+ *
+ * @param recJSON A `cJSON` object that contains information about the current recording.
  */
 esp_err_t mqttworker_publish_recording_state(cJSON *recJSON);
 
@@ -73,11 +77,21 @@ esp_err_t mqttworker_verify_flash_certs(void);
 /**
  * @brief Get the ThingName associated to this device
  *
- * @param[out] out_buff The buffer where the ThingName string will be written to.
+ * @param[out] thing_name The buffer where the ThingName string will be written to.
  */
 esp_err_t mqttworker_get_thingname(char thing_name[128]);
 
 /**
  * @brief Check for pending jobs.
  */
-esp_err_t mqttworker_check_for_jobs();
+esp_err_t mqttworker_check_for_jobs(void);
+
+/**
+ * @brief Reconfigure the TCP keep alive parameters for the MQTT client.
+ *
+ * @param idle_s Seconds the connection must idle before the first keep alive probe.
+ * @param interval_s Time between keepalive probes if there’s no response.
+ * @param retries How many failed probes before declaring the connection dead.
+
+ */
+esp_err_t mqttworker_configure_tcp_keep_alive(int idle_s, int interval_s, int retries);

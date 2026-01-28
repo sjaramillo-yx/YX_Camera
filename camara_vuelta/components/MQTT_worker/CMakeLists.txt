@@ -5,6 +5,7 @@ set(srcs
   src/s3_uploader.c
   src/http_helpers.c
   src/jobs_manager.c
+  src/configuration_worker.c
 )
 
 set(include_dirs include)
@@ -13,6 +14,7 @@ set(
   requires
     esp_app_format
     json
+    configuration_events
     recording_events
     mbedtls
     mqtt

@@ -55,8 +55,12 @@ typedef struct {
 
 /**
  * @brief Recording resulting file data structure
+ *
+ * @todo Unify this structure with `recording_conf_t` to form `recording_ctx_t`
  */
 typedef struct {
+  uint16_t hres;                 // Horizontal resolution
+  uint16_t vres;                 // Vertical resolution
   char     transaction_id[128];  // Transaction ID associated with this file
   char     filename[128];        // Name of the file where the recording was saved to
   uint64_t size;                 // Size in bytes of the resulting file
@@ -80,11 +84,16 @@ esp_err_t rec_eventloop_create();
 
 /**
  * @brief Get the recording event loop handle
+ *
+ * @param[out] out_handle A pointer to an `esp_event_loop_handle_t` where the eventloop handle will
+ * be stored.
  */
 esp_err_t rec_eventloop_get_handle(esp_event_loop_handle_t *out_handle);
 
 /**
  * @brief Print a `recording_conf_t` structure
+ *
+ * @param conf A pointer to the `recording_conf_t` structure that will be printed.
  */
 esp_err_t rec_print_config(recording_conf_t *conf);
 
