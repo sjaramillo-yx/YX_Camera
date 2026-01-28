@@ -8,7 +8,7 @@
 
 #include "mqtt_worker.h"
 #include "NVS_manager.h"
-#include "configuration_events.h"
+#include "command_worker.h"
 #include "configuration_worker.h"
 #include "jobs_manager.h"
 #include "provision_claimer.h"
@@ -78,8 +78,18 @@ handler_ctx_t handler_conf;
  * @brief The configuration events handlers
  */
 esp_event_handler_instance_t conf_applied_handler_h;
+esp_event_handler_instance_t conf_rejected_handler_h;
+esp_event_handler_instance_t conf_error_handler_h;
 
 static esp_event_loop_handle_t conf_event_h;
+
+/**
+ * @brief The command event handlers
+ */
+esp_event_handler_instance_t cmd_done_handler_h;
+esp_event_handler_instance_t cmd_error_handler_h;
+
+static esp_event_loop_handle_t cmd_event_h;
 
 static bool jobs_checked = false;
 
@@ -111,12 +121,24 @@ esp_err_t register_event_handlers() {
                       TAG, "Couldn't register configuration applied event handler");
   ESP_RETURN_ON_ERROR(esp_event_handler_instance_register_with(
                           conf_event_h, CONFIGURATION_EVENTS, CONF_REJECTED, conf_rejected_handler,
-                          &handler_conf, &conf_applied_handler_h),
+                          &handler_conf, &conf_rejected_handler_h),
                       TAG, "Couldn't register configuration rejected event handler");
   ESP_RETURN_ON_ERROR(esp_event_handler_instance_register_with(
                           conf_event_h, CONFIGURATION_EVENTS, CONF_ERROR, conf_error_handler,
-                          &handler_conf, &conf_applied_handler_h),
+                          &handler_conf, &conf_error_handler_h),
                       TAG, "Couldn't register configuration error event handler");
+  ESP_LOGD(TAG, "registering command event handlers");
+  ESP_RETURN_ON_ERROR(cmd_eventloop_get_handle(&cmd_event_h), TAG,
+                      "Couldn't get the command event loop handle");
+  ESP_RETURN_ON_ERROR(esp_event_handler_instance_register_with(cmd_event_h, COMMAND_EVENTS,
+                                                               CMD_DONE, cmd_done_handler,
+                                                               &handler_conf, &cmd_done_handler_h),
+                      TAG, "Couldn't register command done event handler");
+  ESP_RETURN_ON_ERROR(esp_event_handler_instance_register_with(cmd_event_h, COMMAND_EVENTS,
+                                                               CMD_ERROR, cmd_error_handler,
+                                                               &handler_conf, &cmd_error_handler_h),
+                      TAG, "Couldn't register command error event handler");
+
   ESP_LOGD(TAG, "All event handlers registered");
   return ESP_OK;
 }
@@ -187,6 +209,12 @@ static void mqtt_connected_handler(void *handler_args, esp_event_base_t base, in
   // Camera configuration topic
   snprintf(topic_name, sizeof(topic_name),
            CONFIG_PROJ_BASE_NAME "/" CONFIG_PROJ_ENV_NAME "/cameras/%s/configure",
+           mqtt_cert_data.thing_name);
+  ESP_LOGD(TAG, "Subscribing to topic: %s", topic_name);
+  esp_mqtt_client_subscribe(mqtt_client, topic_name, 0);
+  // Camera commands topic
+  snprintf(topic_name, sizeof(topic_name),
+           CONFIG_PROJ_BASE_NAME "/" CONFIG_PROJ_ENV_NAME "/cameras/%s/commands",
            mqtt_cert_data.thing_name);
   ESP_LOGD(TAG, "Subscribing to topic: %s", topic_name);
   esp_mqtt_client_subscribe(mqtt_client, topic_name, 0);
@@ -311,6 +339,18 @@ static void mqtt_data_handler(void *handler_args, esp_event_base_t base, int32_t
     //// TODO: Remove portMAX_DELAY and fail accordingly
     esp_event_post_to(conf_event_h, CONFIGURATION_EVENTS, CONF_RECEIVED, &cam_conf,
                       sizeof(configuration_t), portMAX_DELAY);
+    goto cleanup;
+  }
+
+  /* -- Camera commands -- */
+  sprintf(topic_name, CONFIG_PROJ_BASE_NAME "/" CONFIG_PROJ_ENV_NAME "/cameras/%s/commands",
+          mqtt_cert_data.thing_name);
+  if (!strcmp(received_topic, topic_name)) {
+    ESP_LOGI(TAG, "Received command message");
+    // Get the payload
+    payload = cJSON_ParseWithLength(event->data, event->data_len);
+    // Parse the payload (this will also publish the event)
+    cmd_parse_cjson_payload(payload, cmd_event_h);
     goto cleanup;
   }
 

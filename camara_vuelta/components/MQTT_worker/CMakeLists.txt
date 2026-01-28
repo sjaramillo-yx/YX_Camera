@@ -6,6 +6,7 @@ set(srcs
   src/http_helpers.c
   src/jobs_manager.c
   src/configuration_worker.c
+  src/command_worker.c
 )
 
 set(include_dirs include)
@@ -14,6 +15,7 @@ set(
   requires
     esp_app_format
     json
+    command_events
     configuration_events
     recording_events
     mbedtls

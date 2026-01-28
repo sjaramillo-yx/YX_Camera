@@ -517,3 +517,23 @@ esp_err_t sdman_set_free_space_target(uint64_t free_kb) {
   min_free_bytes = free_kb << 20;  // To bytes
   return sdman_notify_oldest_video_scan_task();
 }
+
+esp_err_t sdman_format_sdcard(void) {
+  if (card == NULL || sd_initialized == false) {
+    ESP_LOGE(TAG, "SD Card is not initialized!");
+    return ESP_ERR_INVALID_STATE;
+  }
+
+  ESP_LOGI(TAG, "Formatting SD card");
+  ESP_RETURN_ON_ERROR(esp_vfs_fat_sdcard_format(mount_point, card), TAG, "Couldn't format SD card");
+
+  ESP_LOGI(TAG, "Recreating directories after format");
+  ESP_RETURN_ON_ERROR(make_dir(CONFIG_SD_CARD_MOUNT_POINT "/videos"), TAG,
+                      "Couldn't create videos directory");
+  ESP_RETURN_ON_ERROR(make_dir(CONFIG_SD_CARD_MOUNT_POINT "/logs"), TAG,
+                      "Couldn't create logs directory");
+  ESP_RETURN_ON_ERROR(make_dir(CONFIG_SD_CARD_MOUNT_POINT "/firmware"), TAG,
+                      "Couldn't create firmware directory");
+
+  return sdman_notify_oldest_video_scan_task();
+}

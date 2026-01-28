@@ -88,6 +88,11 @@ esp_err_t sdman_notify_oldest_video_scan_task(void);
  */
 esp_err_t sdman_set_free_space_target(uint64_t free_kb);
 
+/**
+ * @brief Format the SD card and recreate required directories.
+ */
+esp_err_t sdman_format_sdcard(void);
+
 #ifdef __cplusplus
 }
 #endif

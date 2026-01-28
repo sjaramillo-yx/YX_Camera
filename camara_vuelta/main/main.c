@@ -220,6 +220,22 @@ static void restart_handler(void *handler_arg, esp_event_base_t event_base, int3
   deinit_peripherals();
   esp_restart();
 }
+
+static void format_sd_handler(void *handler_arg, esp_event_base_t event_base, int32_t event_id,
+                              void *event_data) {
+  esp_err_t err          = ESP_OK;
+  char      err_msg[256] = "";
+
+  err = sdman_format_sdcard();
+  if (err != ESP_OK) {
+    snprintf(err_msg, sizeof(err_msg), "Failed formatting SD card: %s", esp_err_to_name(err));
+    esp_event_post_to(cmd_event_h, COMMAND_EVENTS, CMD_ERROR, err_msg, sizeof(err_msg),
+                      portMAX_DELAY);
+    return;
+  }
+  esp_event_post_to(cmd_event_h, COMMAND_EVENTS, CMD_DONE, NULL, 0, portMAX_DELAY);
+}
+
 /*================================================================================================*/
 /*                                      App entry point                                           */
 /*================================================================================================*/
@@ -227,20 +243,6 @@ void app_main(void) {
   esp_err_t err = ESP_OK;
   // Set log levels
   esp_log_level_set("*", ESP_LOG_INFO);
-  esp_log_level_set(TAG, ESP_LOG_DEBUG);
-  esp_log_level_set("mqtt_client", ESP_LOG_INFO);
-  esp_log_level_set("transport_base", ESP_LOG_INFO);
-  esp_log_level_set("transport", ESP_LOG_INFO);
-  esp_log_level_set("Provision Claimer", ESP_LOG_INFO);
-  esp_log_level_set("MQTT Worker", ESP_LOG_DEBUG);
-  esp_log_level_set("MQTT ConfWorker", ESP_LOG_DEBUG);
-  esp_log_level_set("S3Uploader", ESP_LOG_INFO);
-  esp_log_level_set("NVS Manager", ESP_LOG_INFO);
-  esp_log_level_set("Video Manager", ESP_LOG_INFO);
-  esp_log_level_set("SDManager", ESP_LOG_DEBUG);
-  esp_log_level_set("OTAManager", ESP_LOG_DEBUG);
-  esp_log_level_set("HTTPHelpers", ESP_LOG_INFO);
-  esp_log_level_set("AWSJobsManager", ESP_LOG_DEBUG);
   esp_log_level_set("esp-x509-crt-bundle", ESP_LOG_WARN);
 
   ESP_LOGI(TAG, "[APP] Free memory: %" PRIu32 " bytes", esp_get_free_heap_size());
@@ -299,6 +301,12 @@ void app_main(void) {
   ESP_ERROR_CHECK(conf_eventloop_get_handle(&conf_event_h));
   ESP_ERROR_CHECK(esp_event_handler_instance_register_with(
       conf_event_h, CONFIGURATION_EVENTS, CONF_RECEIVED, conf_received_handler, NULL, NULL));
+  /* Register commands event loop handlers */
+  ESP_ERROR_CHECK(cmd_eventloop_get_handle(&cmd_event_h));
+  ESP_ERROR_CHECK(esp_event_handler_instance_register_with(cmd_event_h, COMMAND_EVENTS, CMD_REBOOT,
+                                                           restart_handler, NULL, NULL));
+  ESP_ERROR_CHECK(esp_event_handler_instance_register_with(
+      cmd_event_h, COMMAND_EVENTS, CMD_FORMAT_SD, format_sd_handler, NULL, NULL));
 
   // Initialize ethernet
   ethman_inited = ethman_init(&eth_handle);
