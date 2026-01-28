@@ -89,6 +89,13 @@ esp_err_t s3_uploader_on_connected(void);
  */
 bool s3_uploader_is_busy(void);
 
+/**
+ * @brief Update the MQTT client handle used in this module.
+ * @todo Make all functions receive the mqtt client as an argument and all handlers receive the mqtt
+ * client as part of the context or arguments.
+ */
+void s3_update_mqtt_client(esp_mqtt_client_handle_t new_client);
+
 #ifdef __cplusplus
 }
 #endif

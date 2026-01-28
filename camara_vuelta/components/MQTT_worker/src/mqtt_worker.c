@@ -9,6 +9,7 @@
 #include "mqtt_worker.h"
 #include "NVS_manager.h"
 #include "configuration_events.h"
+#include "configuration_worker.h"
 #include "jobs_manager.h"
 #include "provision_claimer.h"
 #include "recording_worker.h"
@@ -36,9 +37,6 @@ static cert_data_t mqtt_cert_data;
 static esp_event_loop_handle_t rec_event_h;
 static recording_conf_t        rec_conf;
 static char                    rec_stop_id[128];
-
-/* Configuration events */
-static esp_event_loop_handle_t conf_event_h;
 
 /**
  * @brief The MQTT client
@@ -72,11 +70,84 @@ static SemaphoreHandle_t mqtt_conn_semphr = NULL;
  */
 esp_event_handler_instance_t rec_started_handler_h;
 esp_event_handler_instance_t rec_done_handler_h;
-esp_event_handler_instance_t rec_handler_h;
+esp_event_handler_instance_t rec_error_handler_h;
 
-rec_handler_conf_t handler_conf;
+handler_ctx_t handler_conf;
+
+/**
+ * @brief The configuration events handlers
+ */
+esp_event_handler_instance_t conf_applied_handler_h;
+
+static esp_event_loop_handle_t conf_event_h;
 
 static bool jobs_checked = false;
+
+/*================== Statics ==================*/
+esp_err_t register_event_handlers() {
+  /* Get the event loop handles */
+  /// TODO:  Check for errors
+  ESP_LOGD(TAG, "registering recording event handlers");
+  ESP_RETURN_ON_ERROR(rec_eventloop_get_handle(&rec_event_h), TAG,
+                      "Couldn't get the recording event loop handle");
+  ESP_RETURN_ON_ERROR(esp_event_handler_instance_register_with(
+                          rec_event_h, RECORDING_EVENTS, REC_STARTED, rec_started_handler,
+                          &handler_conf, &rec_started_handler_h),
+                      TAG, "Couldn't register recording started event handler");
+  ESP_RETURN_ON_ERROR(esp_event_handler_instance_register_with(rec_event_h, RECORDING_EVENTS,
+                                                               REC_DONE, rec_done_handler,
+                                                               &handler_conf, &rec_done_handler_h),
+                      TAG, "Couldn't register recording done event handler");
+  ESP_RETURN_ON_ERROR(esp_event_handler_instance_register_with(rec_event_h, RECORDING_EVENTS,
+                                                               REC_ERROR, rec_error_handler,
+                                                               &handler_conf, &rec_error_handler_h),
+                      TAG, "Couldn't register recording error event handler");
+  ESP_LOGD(TAG, "registering configuration event handlers");
+  ESP_RETURN_ON_ERROR(conf_eventloop_get_handle(&conf_event_h), TAG,
+                      "Couldn't get the configuration event loop handle");
+  ESP_RETURN_ON_ERROR(esp_event_handler_instance_register_with(
+                          conf_event_h, CONFIGURATION_EVENTS, CONF_APPLIED, conf_applied_handler,
+                          &handler_conf, &conf_applied_handler_h),
+                      TAG, "Couldn't register configuration applied event handler");
+  ESP_LOGD(TAG, "All event handlers registered");
+  return ESP_OK;
+}
+
+/// TODO: Receive a pointer to a certificate string or use the mqtt client conf
+/*
+static esp_err_t mqttworker_verify_flash_certs(void) {
+  int                ret = ESP_OK;
+  mbedtls_x509_crt   client;
+  mbedtls_pk_context key;
+
+  // Parse client certificate
+  mbedtls_x509_crt_init(&client);
+  ret = mbedtls_x509_crt_parse(&client, (const unsigned char *)client_cert_pem_start,
+                               strlen((const char *)client_cert_pem_start) + 1);
+  if (ret != 0) {
+    ESP_LOGE(TAG, "client cert parse failed: -0x%04X", (unsigned)(-ret));
+    mbedtls_x509_crt_free(&client);
+    return ESP_FAIL;
+  }
+  ESP_LOGI(TAG, "Client certificate in binary correctly parsed");
+
+  // Parse private key
+  mbedtls_pk_init(&key);
+  ret = mbedtls_pk_parse_key(&key, (const unsigned char *)client_key_pem_start,
+                             strlen((const char *)client_key_pem_start) + 1, NULL, 0, NULL, NULL);
+  if (ret != 0) {
+    ESP_LOGE(TAG, "client key parse failed: -0x%04X", (unsigned)(-ret));
+    mbedtls_pk_free(&key);
+    mbedtls_x509_crt_free(&client);
+    return ESP_FAIL;
+  }
+  ESP_LOGI(TAG, "Client key in binary correctly parsed");
+
+  mbedtls_pk_free(&key);
+  mbedtls_x509_crt_free(&client);
+  return ESP_OK;
+}
+  */
 
 /*================== Event Handlers ==================*/
 /**
@@ -91,7 +162,7 @@ static void mqtt_connected_handler(void *handler_args, esp_event_base_t base, in
                                    void *event_data) {
   ESP_LOGI(TAG, "Connected to MQTT broker");
   esp_mqtt_event_handle_t  event            = event_data;
-  esp_mqtt_client_handle_t client           = event->client;
+  esp_mqtt_client_handle_t mqtt_client      = event->client;
   char                     topic_name[1024] = "";
 
   /*----- Subscribe to relevant topics -----*/
@@ -99,18 +170,18 @@ static void mqtt_connected_handler(void *handler_args, esp_event_base_t base, in
   snprintf(topic_name, sizeof(topic_name),
            CONFIG_PROJ_BASE_NAME "/" CONFIG_PROJ_ENV_NAME "/recordings/%s/start",
            mqtt_cert_data.thing_name);
-  esp_mqtt_client_subscribe(client, topic_name, 0);
+  esp_mqtt_client_subscribe(mqtt_client, topic_name, 0);
   // Jobs notify topics
   snprintf(topic_name, sizeof(topic_name), "$aws/things/%s/jobs/notify-next",
            mqtt_cert_data.thing_name);
   ESP_LOGD(TAG, "Subscribing to topic: %s", topic_name);
-  esp_mqtt_client_subscribe(client, topic_name, 0);
+  esp_mqtt_client_subscribe(mqtt_client, topic_name, 0);
   // Camera configuration topic
   snprintf(topic_name, sizeof(topic_name),
            CONFIG_PROJ_BASE_NAME "/" CONFIG_PROJ_ENV_NAME "/cameras/%s/configure",
            mqtt_cert_data.thing_name);
   ESP_LOGD(TAG, "Subscribing to topic: %s", topic_name);
-  esp_mqtt_client_subscribe(client, topic_name, 0);
+  esp_mqtt_client_subscribe(mqtt_client, topic_name, 0);
   // Connect the S3 uploader
   s3_uploader_on_connected();
   // Check for Jobs (only once)
@@ -226,29 +297,8 @@ static void mqtt_data_handler(void *handler_args, esp_event_base_t base, int32_t
     ESP_LOGI(TAG, "Received configuration message");
     // Get the payload
     payload = cJSON_ParseWithLength(event->data, event->data_len);
-    // Check that the formatting is correct
-    if (!cJSON_IsNumber(cJSON_GetObjectItem(payload, "status_period_ms")) ||
-        !cJSON_IsNumber(cJSON_GetObjectItem(payload, "min_sd_free_space_kb")) ||
-        !cJSON_IsNumber(cJSON_GetObjectItem(payload, "tcp_keep_alive_idle_s")) ||
-        !cJSON_IsNumber(cJSON_GetObjectItem(payload, "tcp_keep_alive_interval_s")) ||
-        !cJSON_IsNumber(cJSON_GetObjectItem(payload, "tcp_keep_alive_retries"))) {
-      ESP_LOGW(TAG, "Invalid payload format");
-      goto cleanup;
-    }
-
-    //// TODO: REMOVE THIS!!!!
-    ESP_LOGD(TAG, "%s", cJSON_Print(payload));
-    // Extract values from payload
-    cam_conf.status_period_ms =
-        cJSON_GetNumberValue(cJSON_GetObjectItem(payload, "status_period_ms"));
-    cam_conf.min_sd_free_space_kb =
-        cJSON_GetNumberValue(cJSON_GetObjectItem(payload, "min_sd_free_space_kb"));
-    cam_conf.tcp_keep_alive_idle_s =
-        cJSON_GetNumberValue(cJSON_GetObjectItem(payload, "tcp_keep_alive_idle_s"));
-    cam_conf.tcp_keep_alive_interval_s =
-        cJSON_GetNumberValue(cJSON_GetObjectItem(payload, "tcp_keep_alive_interval_s"));
-    cam_conf.tcp_keep_alive_retries =
-        cJSON_GetNumberValue(cJSON_GetObjectItem(payload, "tcp_keep_alive_retries"));
+    // Parse the payload
+    conf_parse_cjson_payload(payload, &cam_conf);
     // Publish the configuration event
     //// TODO: Remove portMAX_DELAY and fail accordingly
     esp_event_post_to(conf_event_h, CONFIGURATION_EVENTS, CONF_RECEIVED, &cam_conf,
@@ -264,43 +314,6 @@ cleanup:
     /// TODO: publish error event
   }
 }
-
-/*================== Statics ==================*/
-/// TODO: Receive a pointer to a certificate string or use the mqtt client conf
-/*
-static esp_err_t mqttworker_verify_flash_certs(void) {
-  int                ret = ESP_OK;
-  mbedtls_x509_crt   client;
-  mbedtls_pk_context key;
-
-  // Parse client certificate
-  mbedtls_x509_crt_init(&client);
-  ret = mbedtls_x509_crt_parse(&client, (const unsigned char *)client_cert_pem_start,
-                               strlen((const char *)client_cert_pem_start) + 1);
-  if (ret != 0) {
-    ESP_LOGE(TAG, "client cert parse failed: -0x%04X", (unsigned)(-ret));
-    mbedtls_x509_crt_free(&client);
-    return ESP_FAIL;
-  }
-  ESP_LOGI(TAG, "Client certificate in binary correctly parsed");
-
-  // Parse private key
-  mbedtls_pk_init(&key);
-  ret = mbedtls_pk_parse_key(&key, (const unsigned char *)client_key_pem_start,
-                             strlen((const char *)client_key_pem_start) + 1, NULL, 0, NULL, NULL);
-  if (ret != 0) {
-    ESP_LOGE(TAG, "client key parse failed: -0x%04X", (unsigned)(-ret));
-    mbedtls_pk_free(&key);
-    mbedtls_x509_crt_free(&client);
-    return ESP_FAIL;
-  }
-  ESP_LOGI(TAG, "Client key in binary correctly parsed");
-
-  mbedtls_pk_free(&key);
-  mbedtls_x509_crt_free(&client);
-  return ESP_OK;
-}
-  */
 
 /*================== Public Functions ==================*/
 esp_err_t mqttworker_publish_initial_state(cJSON *sdJSON, cJSON *vmanJSON) {
@@ -419,10 +432,19 @@ esp_err_t mqttworker_configure_tcp_keep_alive(int idle_s, int interval_s, int re
     mqtt_cfg.network.tcp_keep_alive_cfg.keep_alive_interval = old_inteval;
     mqtt_cfg.network.tcp_keep_alive_cfg.keep_alive_count    = old_retries;
     client                                                  = esp_mqtt_client_init(&mqtt_cfg);
+    /* Register the event handlers */
+    esp_mqtt_client_register_event(client, MQTT_EVENT_CONNECTED, mqtt_connected_handler, NULL);
+    esp_mqtt_client_register_event(client, MQTT_EVENT_DATA, mqtt_data_handler, NULL);
     esp_mqtt_client_start(client);
     return ESP_ERR_INVALID_ARG;
   }
-
+  ESP_LOGD(TAG, "Registering event handlers for MQTT client");
+  esp_mqtt_client_register_event(client, MQTT_EVENT_CONNECTED, mqtt_connected_handler, NULL);
+  esp_mqtt_client_register_event(client, MQTT_EVENT_DATA, mqtt_data_handler, NULL);
+  // Update MQTT client in submodules
+  s3_update_mqtt_client(client);
+  jobs_update_mqtt_client(client);
+  ESP_LOGD(TAG, "Restarting MQTT client");
   return esp_mqtt_client_start(client);
 }
 
@@ -453,30 +475,12 @@ esp_err_t mqttworker_init(QueueHandle_t free_chunk_queue, QueueHandle_t filled_c
   ESP_LOGD(TAG, "ThingName is %s", mqtt_cert_data.thing_name);
   mqtt_cfg.credentials.client_id = (const char *)mqtt_cert_data.thing_name;
   client                         = esp_mqtt_client_init(&mqtt_cfg);
-
-  /* Register the event handlers */
+  handler_conf.mqtt_client       = &client;
+  strlcpy(handler_conf.thing_name, mqtt_cert_data.thing_name, sizeof(handler_conf.thing_name));
+  // Register MQTT event handlers
   esp_mqtt_client_register_event(client, MQTT_EVENT_CONNECTED, mqtt_connected_handler, NULL);
   esp_mqtt_client_register_event(client, MQTT_EVENT_DATA, mqtt_data_handler, NULL);
-  /* Get the event loop handles */
-  /// TODO:  Check for errors
-  ESP_RETURN_ON_ERROR(conf_eventloop_get_handle(&conf_event_h), TAG,
-                      "Couldn't get the configuration event loop handle");
-  ESP_RETURN_ON_ERROR(rec_eventloop_get_handle(&rec_event_h), TAG,
-                      "Couldn't get the recording event loop handle");
-  handler_conf.mqtt_client = client;
-  strlcpy(handler_conf.thing_name, mqtt_cert_data.thing_name, sizeof(handler_conf.thing_name));
-  ESP_RETURN_ON_ERROR(esp_event_handler_instance_register_with(
-                          rec_event_h, RECORDING_EVENTS, REC_STARTED, rec_started_handler,
-                          &handler_conf, &rec_started_handler_h),
-                      TAG, "Couldn't register recording started event handler");
-  ESP_RETURN_ON_ERROR(esp_event_handler_instance_register_with(rec_event_h, RECORDING_EVENTS,
-                                                               REC_DONE, rec_done_handler,
-                                                               &handler_conf, &rec_done_handler_h),
-                      TAG, "Couldn't register recording done event handler");
-  ESP_RETURN_ON_ERROR(esp_event_handler_instance_register_with(rec_event_h, RECORDING_EVENTS,
-                                                               REC_ERROR, rec_error_handler,
-                                                               &handler_conf, &rec_handler_h),
-                      TAG, "Couldn't register recording error event handler");
+  register_event_handlers();
   /* Initialize the jobs manager */
   ESP_RETURN_ON_ERROR(
       jobs_init(client, mqtt_cert_data.ota_key, free_chunk_queue, filled_chunk_queue), TAG,
@@ -515,9 +519,18 @@ esp_err_t mqttworker_stop() {
 esp_err_t mqttworker_deinit(void) {
   ESP_RETURN_ON_ERROR(jobs_deinit(), TAG, "Coudln't deinitialize the Jobs Manager");
   ESP_RETURN_ON_ERROR(s3uploader_deinit(), TAG, "Couldn't deinitialize the S3 Uploader");
+  ESP_RETURN_ON_ERROR(esp_event_handler_instance_unregister_with(
+                          rec_event_h, RECORDING_EVENTS, REC_STARTED, rec_started_handler_h),
+                      TAG, "Couldn't unregister recording started event handler");
   ESP_RETURN_ON_ERROR(esp_event_handler_instance_unregister_with(rec_event_h, RECORDING_EVENTS,
-                                                                 ESP_EVENT_ANY_ID, rec_handler_h),
-                      TAG, "Couldn't unregister recording events handler");
+                                                                 REC_DONE, rec_done_handler_h),
+                      TAG, "Couldn't unregister recording done event handler");
+  ESP_RETURN_ON_ERROR(esp_event_handler_instance_unregister_with(rec_event_h, RECORDING_EVENTS,
+                                                                 REC_ERROR, rec_error_handler_h),
+                      TAG, "Couldn't unregister recording error event handler");
+  ESP_RETURN_ON_ERROR(esp_event_handler_instance_unregister_with(
+                          conf_event_h, CONFIGURATION_EVENTS, CONF_APPLIED, conf_applied_handler_h),
+                      TAG, "Couldn't unregister configuration applied event handler");
   ESP_RETURN_ON_ERROR(esp_mqtt_client_unregister_event(client, MQTT_EVENT_DATA, mqtt_data_handler),
                       TAG, "Couldn't unregister MQTT data handler");
   ESP_RETURN_ON_ERROR(

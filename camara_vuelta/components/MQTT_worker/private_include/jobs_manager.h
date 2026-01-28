@@ -63,6 +63,14 @@ esp_err_t jobs_data_handler(const char *thing_name, const char *data, int data_l
 esp_err_t jobs_stream_data_handler(const char *thing_name, const char *data, int data_len);
 
 /**
+ * @brief Update the MQTT client handle used in this module.
+ *
+ * @todo Make all functions receive the mqtt client as an argument and all handlers receive the mqtt
+ * client as part of the context or arguments.
+ */
+void jobs_update_mqtt_client(esp_mqtt_client_handle_t new_client);
+
+/**
  * @brief Initialize AWSJobsManager.
  *
  * @param client The MQTT client used to communicate with AWS.

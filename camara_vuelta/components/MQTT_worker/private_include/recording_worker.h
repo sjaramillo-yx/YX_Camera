@@ -29,11 +29,6 @@
 extern "C" {
 #endif
 
-typedef struct rec_handler_conf_t {
-  char                     thing_name[128];
-  esp_mqtt_client_handle_t mqtt_client;
-} rec_handler_conf_t;
-
 /**
  * @brief Parse a recording start command and write the corresponding `recording_conf_t` object
  * fields.

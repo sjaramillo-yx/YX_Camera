@@ -693,3 +693,5 @@ esp_err_t s3uploader_deinit(void) {
 
   return ESP_OK;
 }
+
+void s3_update_mqtt_client(esp_mqtt_client_handle_t new_client) { client = new_client; }

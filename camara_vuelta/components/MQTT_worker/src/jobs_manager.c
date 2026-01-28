@@ -762,6 +762,8 @@ esp_err_t jobs_stream_data_handler(const char *thing_name, const char *data, int
   return ret;
 }
 
+void jobs_update_mqtt_client(esp_mqtt_client_handle_t new_client) { mqtt_client = new_client; }
+
 /*================== Initalize, Begin, Stop and Deinitialize ==================*/
 esp_err_t jobs_init(esp_mqtt_client_handle_t client, char *codesign_certificate,
                     QueueHandle_t free_chunk_queue, QueueHandle_t filled_chunk_queue) {
