@@ -11,11 +11,13 @@
 #include <freertos/timers.h>
 /* Custom includes */
 #include "OTA_events.h"
+#include "command_events.h"
 #include "configuration_events.h"
 #include "recording_events.h"
 ESP_EVENT_DEFINE_BASE(RECORDING_EVENTS);  // Event base must be declared here (not sure why)
 ESP_EVENT_DEFINE_BASE(OTA_EVENTS);
 ESP_EVENT_DEFINE_BASE(CONFIGURATION_EVENTS);
+ESP_EVENT_DEFINE_BASE(COMMAND_EVENTS);
 #include "OTA_manager.h"
 #include "SD_manager.h"
 #include "ethernet_manager.h"
@@ -39,6 +41,7 @@ static esp_err_t ota_rec_retrieved;
 // Event loops
 static esp_event_loop_handle_t OTA_event_h;
 static esp_event_loop_handle_t conf_event_h;
+static esp_event_loop_handle_t cmd_event_h;
 // Peripheral JSONs
 cJSON *sdJSON;
 cJSON *vmanJSON;
@@ -273,6 +276,7 @@ void app_main(void) {
   conf_eventloop_create();
   rec_eventloop_create();
   OTA_eventloop_create();
+  cmd_eventloop_create();
   ESP_LOGI(TAG, "Event loops created");
 
   // Initialize OTAManager
