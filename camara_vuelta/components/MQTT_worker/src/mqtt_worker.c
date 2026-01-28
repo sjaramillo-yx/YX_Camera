@@ -109,6 +109,14 @@ esp_err_t register_event_handlers() {
                           conf_event_h, CONFIGURATION_EVENTS, CONF_APPLIED, conf_applied_handler,
                           &handler_conf, &conf_applied_handler_h),
                       TAG, "Couldn't register configuration applied event handler");
+  ESP_RETURN_ON_ERROR(esp_event_handler_instance_register_with(
+                          conf_event_h, CONFIGURATION_EVENTS, CONF_REJECTED, conf_rejected_handler,
+                          &handler_conf, &conf_applied_handler_h),
+                      TAG, "Couldn't register configuration rejected event handler");
+  ESP_RETURN_ON_ERROR(esp_event_handler_instance_register_with(
+                          conf_event_h, CONFIGURATION_EVENTS, CONF_ERROR, conf_error_handler,
+                          &handler_conf, &conf_applied_handler_h),
+                      TAG, "Couldn't register configuration error event handler");
   ESP_LOGD(TAG, "All event handlers registered");
   return ESP_OK;
 }

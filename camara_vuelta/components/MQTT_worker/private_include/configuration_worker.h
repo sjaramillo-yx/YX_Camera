@@ -39,6 +39,18 @@ esp_err_t conf_parse_cjson_payload(cJSON *payload, configuration_t *out_conf);
 void conf_applied_handler(void *handler_arg, esp_event_base_t event_base, int32_t event_id,
                           void *event_data);
 
+/**
+ * @brief The event handler for the `CONF_REJECTED` event.
+ */
+void conf_rejected_handler(void *handler_arg, esp_event_base_t event_base, int32_t event_id,
+                           void *event_data);
+
+/**
+ * @brief The event handler for the `CONF_ERROR` event.
+ */
+void conf_error_handler(void *handler_arg, esp_event_base_t event_base, int32_t event_id,
+                        void *event_data);
+
 #ifdef __cplusplus
 }
 #endif

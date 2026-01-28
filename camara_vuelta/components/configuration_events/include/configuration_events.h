@@ -29,7 +29,7 @@ ESP_EVENT_DECLARE_BASE(CONFIGURATION_EVENTS);
 /**
  * @brief All the possible recording events
  */
-typedef enum {
+typedef enum configuration_event_t {
   CONF_RECEIVED,  // A new configuration message has been received.
   CONF_APPLIED,   // The received configuration has been successfully applied.
   CONF_REJECTED,  // The configuration values have been rejected.

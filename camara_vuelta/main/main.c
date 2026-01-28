@@ -43,8 +43,9 @@ static esp_event_loop_handle_t conf_event_h;
 cJSON *sdJSON;
 cJSON *vmanJSON;
 // TCP Keep alive configurations
-static int          tcp_idle_s, tcp_interval_s, tcp_retries;
-static TaskHandle_t mqtt_conf_task_h;
+static int               tcp_idle_s, tcp_interval_s, tcp_retries;
+static TaskHandle_t      mqtt_conf_task_h;
+static SemaphoreHandle_t mqtt_conf_smphr;
 // Timers
 static TimerHandle_t status_timer_h;
 
@@ -79,15 +80,20 @@ static void mqtt_configure_task(void *args) {
   /// NOTE: This task exists only because a bigger stack is needed to reconfigure the TCP layer.
   esp_err_t err = ESP_OK;
   while (true) {
-    ulTaskNotifyTake(false, portMAX_DELAY);
+    while (xSemaphoreTake(mqtt_conf_smphr, portMAX_DELAY) != pdTRUE)
+      continue;
+    ESP_LOGD(TAG, "Configuring TCP keep alive values");
     err = mqttworker_configure_tcp_keep_alive(tcp_idle_s, tcp_interval_s, tcp_retries);
     if (err != ESP_OK) {
       ESP_LOGE(TAG, "Couldn't configure TCP keep alive values (%s)", esp_err_to_name(err));
-      continue;
+      goto end;
     }
-    ESP_LOGI(TAG, "Set the TCP Keep Alive idle period to %ds", tcp_idle_s);
-    ESP_LOGI(TAG, "Set the TCP Keep Alive interval to %ds", tcp_interval_s);
-    ESP_LOGI(TAG, "Set the TCP Keep Alive retry count to %d ", tcp_retries);
+    ESP_LOGI(TAG,
+             "Set the TCP Keep Alive idle period to %ds, interval to %ds and retry count to %d",
+             tcp_idle_s, tcp_interval_s, tcp_retries);
+  end:
+    xSemaphoreGive(mqtt_conf_smphr);
+    vTaskDelay(10);
   }
 }
 
@@ -132,70 +138,78 @@ static void ota_job_error_handler(void *handler_arg, esp_event_base_t event_base
 
 static void conf_received_handler(void *handler_arg, esp_event_base_t event_base, int32_t event_id,
                                   void *event_data) {
-  configuration_t *conf           = event_data;
-  char             error_msg[256] = "";
-  esp_err_t        ret            = ESP_OK;  // Necessary for ESP_GOTO macros
+  configuration_t      *conf           = event_data;
+  char                  error_msg[256] = "";
+  esp_err_t             ret            = ESP_OK;  // Necessary for ESP_GOTO macros
+  configuration_event_t out_event      = CONF_APPLIED;
 
+  /* First validate inputs */
   /// TODO: Define upper and lower limits as KConfig options
-  ///////////////////////////
-  // Status message period //
-  ///////////////////////////
-  if (0 < conf->status_period_ms && conf->status_period_ms < portMAX_DELAY) {
-    ESP_LOGD(TAG, "Setting the status message period to %d ms", conf->status_period_ms);
-    if (xTimerChangePeriod(status_timer_h, pdMS_TO_TICKS(conf->status_period_ms), portMAX_DELAY) !=
-        pdPASS) {
-      snprintf(error_msg, sizeof(error_msg), "Couldn't set the new status message period.");
-      goto error;
-    }
-    /// TODO: Remove portMAX_DELAY
-    xTimerReset(status_timer_h, portMAX_DELAY);
-    ESP_LOGI(TAG, "New status message period is %d ms", conf->status_period_ms);
-  } else {
+  if (0 > conf->status_period_ms || conf->status_period_ms > portMAX_DELAY) {
     snprintf(error_msg, sizeof(error_msg),
              "Status period outside limits. Must be greater than %d and lower than %lu.", 0,
              portMAX_DELAY);
-    goto rejected;
+    out_event = CONF_REJECTED;
+    goto end;
   }
-
-  /////////////////////////////////
-  // TCP configuration for MQTT //
-  /////////////////////////////////
-  if ((0 < conf->tcp_keep_alive_idle_s && conf->tcp_keep_alive_idle_s < 256) &&
-      (0 < conf->tcp_keep_alive_interval_s && conf->tcp_keep_alive_interval_s < 256) &&
-      (0 < conf->tcp_keep_alive_retries && conf->tcp_keep_alive_retries < 256)) {
-    ESP_LOGD(TAG, "Setting the TCP Keep Alive idle period to %ds", conf->tcp_keep_alive_idle_s);
-    ESP_LOGD(TAG, "Setting the TCP Keep Alive interval to %ds", conf->tcp_keep_alive_interval_s);
-    ESP_LOGD(TAG, "Setting the TCP Keep Alive retry count to %d", conf->tcp_keep_alive_retries);
-    tcp_idle_s     = conf->tcp_keep_alive_idle_s;
-    tcp_interval_s = conf->tcp_keep_alive_interval_s;
-    tcp_retries    = conf->tcp_keep_alive_retries;
-    xTaskNotifyGive(mqtt_conf_task_h);
-  } else {
-    snprintf(error_msg, sizeof(error_msg),
-             "TCP values outside limits. Must be greater than %d and lower than %d.", 0, 256);
-    goto rejected;
-  }
-
-  ////////////////////////
-  // SD Card free space //
-  ////////////////////////
-  if (0 < conf->min_sd_free_space_kb && conf->min_sd_free_space_kb < (8ULL << 20)) {
-    ESP_LOGD(TAG, "Setting minimum free space in SD card to %d KB", conf->min_sd_free_space_kb);
-    sdman_set_free_space_target(conf->min_sd_free_space_kb);
-  } else {
-    /// NOTE: This limits the maximum value to 20 GB, but it would be wiser to use SD card size.
+  if (0 > conf->min_sd_free_space_kb || conf->min_sd_free_space_kb > (8ULL << 20)) {
+    /// NOTE: This limits the maximum value to 8 GB, but it would be wiser to use SD card size.
     snprintf(
         error_msg, sizeof(error_msg),
         "SD minimum free space value outside limits. Must be greater than %d and lower than %llu.",
         0, (8ULL << 20));
-    goto rejected;
+    out_event = CONF_REJECTED;
+    goto end;
   }
 
-rejected:
-  /// TODO: Post CONF_REJECTED event
-  return;
-error:
-  /// TODO: Post CONF_ERROR event
+  if ((0 > conf->tcp_keep_alive_idle_s && conf->tcp_keep_alive_idle_s > 256) &&
+      (0 > conf->tcp_keep_alive_interval_s && conf->tcp_keep_alive_interval_s > 256) &&
+      (0 > conf->tcp_keep_alive_retries && conf->tcp_keep_alive_retries > 256)) {
+    snprintf(error_msg, sizeof(error_msg),
+             "TCP values outside limits. Must be greater than %d and lower than %d.", 0, 256);
+    out_event = CONF_REJECTED;
+    goto end;
+  }
+
+  ///////////////////////////
+  // Status message period //
+  ///////////////////////////
+  ESP_LOGD(TAG, "Setting the status message period to %d ms", conf->status_period_ms);
+  if (xTimerChangePeriod(status_timer_h, pdMS_TO_TICKS(conf->status_period_ms), portMAX_DELAY) !=
+      pdPASS) {
+    snprintf(error_msg, sizeof(error_msg), "Couldn't set the new status message period.");
+    out_event = CONF_ERROR;
+    goto end;
+  }
+  /// TODO: Remove portMAX_DELAY
+  publish_status_callback(NULL);
+  xTimerReset(status_timer_h, portMAX_DELAY);
+  ESP_LOGI(TAG, "New status message period is %d ms", conf->status_period_ms);
+
+  ////////////////////////
+  // SD Card free space //
+  ////////////////////////
+  ESP_LOGD(TAG, "Setting minimum free space in SD card to %d KB", conf->min_sd_free_space_kb);
+  sdman_set_free_space_target(conf->min_sd_free_space_kb);
+
+  /////////////////////////////////
+  // TCP configuration for MQTT //
+  /////////////////////////////////
+  ESP_LOGD(TAG, "Setting the TCP Keep Alive idle period to %ds", conf->tcp_keep_alive_idle_s);
+  ESP_LOGD(TAG, "Setting the TCP Keep Alive interval to %ds", conf->tcp_keep_alive_interval_s);
+  ESP_LOGD(TAG, "Setting the TCP Keep Alive retry count to %d", conf->tcp_keep_alive_retries);
+  tcp_idle_s     = conf->tcp_keep_alive_idle_s;
+  tcp_interval_s = conf->tcp_keep_alive_interval_s;
+  tcp_retries    = conf->tcp_keep_alive_retries;
+  xSemaphoreGive(mqtt_conf_smphr);
+  vTaskDelay(10);
+  // Wait for MQTT TCP Keep Alive configuration task
+  xSemaphoreTake(mqtt_conf_smphr, portMAX_DELAY);
+
+end:
+
+  esp_event_post_to(conf_event_h, CONFIGURATION_EVENTS, out_event, error_msg, sizeof(error_msg),
+                    portMAX_DELAY);
   return;
 }
 
@@ -212,6 +226,7 @@ void app_main(void) {
   esp_log_level_set("transport", ESP_LOG_INFO);
   esp_log_level_set("Provision Claimer", ESP_LOG_INFO);
   esp_log_level_set("MQTT Worker", ESP_LOG_DEBUG);
+  esp_log_level_set("MQTT ConfWorker", ESP_LOG_DEBUG);
   esp_log_level_set("S3Uploader", ESP_LOG_INFO);
   esp_log_level_set("NVS Manager", ESP_LOG_INFO);
   esp_log_level_set("Video Manager", ESP_LOG_INFO);
@@ -324,8 +339,10 @@ void app_main(void) {
   // Publish initial state
   hello_published = mqttworker_publish_initial_state(sdJSON, vmanJSON);  // Also frees cJSON memory
 
+  // Create the MQTT TCP Keep Alive configuration semaphore
+  mqtt_conf_smphr = xSemaphoreCreateBinary();
   // Create the MQTT TCP Keep Alive configuration task
-  if (xTaskCreate(mqtt_configure_task, "mqtt.conf.task", 2048, NULL, 5, &mqtt_conf_task_h) !=
+  if (xTaskCreate(mqtt_configure_task, "mqtt.conf.task", 4096, NULL, 5, &mqtt_conf_task_h) !=
       pdPASS) {
     ESP_LOGE(TAG, "Couldn't create the MQTT TCP Keep Alive configuration task!");
   }
