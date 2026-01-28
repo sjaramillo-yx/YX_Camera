@@ -110,7 +110,7 @@ static void sdman_prune_newest_candidates(video_candidate_t **head, uint64_t tar
 }
 
 static void sdman_insert_candidate(video_candidate_t **head, const char *name, time_t mtime,
-                                   uint64_t size, uint64_t *total_bytes) {
+                                   uint64_t size, uint64_t target_bytes, uint64_t *total_bytes) {
   // Allocate memory for new candidate
   video_candidate_t *entry = calloc(1, sizeof(video_candidate_t));
   if (entry == NULL) {
@@ -147,10 +147,23 @@ static void sdman_insert_candidate(video_candidate_t **head, const char *name, t
   // Add this candidate's bytes to the total byte count.
   *total_bytes += size;
   // Remove newest candidates from the list in order to delete just the necessary candidates later.
-  sdman_prune_newest_candidates(head, min_free_bytes, total_bytes);
+  sdman_prune_newest_candidates(head, target_bytes, total_bytes);
 }
 
 static void sdman_scan_oldest_videos(void) {
+  uint64_t sd_total_size = 0;
+  uint64_t sd_free_size  = 0;
+  if (esp_vfs_fat_info(mount_point, &sd_total_size, &sd_free_size) != ESP_OK) {
+    ESP_LOGW(TAG, "[%s] Failed to read SD card info, skipping scan", __func__);
+    return;
+  }
+  if (sd_free_size >= min_free_bytes) {
+    ESP_LOGD(TAG, "[%s] Free space already sufficient (%llu bytes free, target %llu)", __func__,
+             (unsigned long long)sd_free_size, (unsigned long long)min_free_bytes);
+    return;
+  }
+  uint64_t bytes_needed = min_free_bytes - sd_free_size;
+
   char   dir_path[256];
   size_t dir_len = snprintf(dir_path, sizeof(dir_path), "%s/videos", mount_point);
   if (dir_len == 0 || dir_len >= sizeof(dir_path)) {
@@ -190,7 +203,7 @@ static void sdman_scan_oldest_videos(void) {
     }
     file_count++;
     sdman_insert_candidate(&candidates, entry->d_name, st.st_mtime, (uint64_t)st.st_size,
-                           &total_bytes);
+                           bytes_needed, &total_bytes);
   }
 
   closedir(dir);
@@ -200,9 +213,10 @@ static void sdman_scan_oldest_videos(void) {
     return;
   }
 
-  if (total_bytes < min_free_bytes) {
-    ESP_LOGW(TAG, "[%s] Only %llu bytes found (%u files), below 1GB target", __func__,
-             (unsigned long long)total_bytes, (unsigned)file_count);
+  if (total_bytes < bytes_needed) {
+    ESP_LOGW(TAG, "[%s] Only %llu bytes found (%u files), below %llu bytes needed", __func__,
+             (unsigned long long)total_bytes, (unsigned)file_count,
+             (unsigned long long)bytes_needed);
   } else {
     ESP_LOGI(TAG, "[%s] Found %llu bytes across oldest videos (%u files scanned)", __func__,
              (unsigned long long)total_bytes, (unsigned)file_count);
