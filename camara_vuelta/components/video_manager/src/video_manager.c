@@ -179,8 +179,9 @@ static esp_event_loop_handle_t      rec_event_h;
 static esp_event_handler_instance_t rec_handler_h;
 
 // Recording statistics
-static int      current_fps     = 0;
-static uint64_t current_bitrate = 0;
+static int                current_fps         = 0;
+static uint64_t           current_bitrate     = 0;
+static esp_timer_handle_t s_rec_timeout_timer = NULL;
 
 /*========================= ISR Callbacks =========================*/
 
@@ -206,6 +207,41 @@ static bool IRAM_ATTR on_trans_finished(esp_cam_ctlr_handle_t h, esp_cam_ctlr_tr
 }
 
 static esp_cam_ctlr_evt_cbs_t cbs = {.on_trans_finished = on_trans_finished};
+
+static void rec_timeout_cb(void *arg) {
+  (void)arg;
+  if (!recording || rec_event_h == NULL) {
+    return;
+  }
+  const char *transaction_id = rec_conf.transaction_id;
+  if (transaction_id[0] == '\0') {
+    return;
+  }
+  esp_err_t err = esp_event_post_to(rec_event_h, RECORDING_EVENTS, REC_STOP, (void *)transaction_id,
+                                    strlen(transaction_id) + 1, 0);
+  if (err != ESP_OK) {
+    ESP_LOGW(TAG, "Failed to post REC_STOP from timeout (%s)", esp_err_to_name(err));
+  } else {
+    ESP_LOGD(TAG, "REC_STOP event posted from timeout");
+  }
+}
+
+static void stop_rec_timeout_timer(void) {
+  if (s_rec_timeout_timer && esp_timer_is_active(s_rec_timeout_timer)) {
+    esp_timer_stop(s_rec_timeout_timer);
+  }
+}
+
+static void start_rec_timeout_timer(uint32_t timeout_seconds) {
+  stop_rec_timeout_timer();
+  if (timeout_seconds == 0 || s_rec_timeout_timer == NULL) {
+    return;
+  }
+  esp_err_t err = esp_timer_start_once(s_rec_timeout_timer, timeout_seconds * 1000000ULL);
+  if (err != ESP_OK) {
+    ESP_LOGW(TAG, "Failed to start recording timeout timer (%s)", esp_err_to_name(err));
+  }
+}
 
 static void update_sensor_color_config(const esp_cam_sensor_device_t *dev) {
   const char *format_name = dev && dev->cur_format ? dev->cur_format->name : NULL;
@@ -776,8 +812,10 @@ static void vman_rec_handler(void *handler_arg, esp_event_base_t event_base, int
     rec_file.transaction_id[sizeof(rec_file.transaction_id) - 1] = '\0';
     esp_event_post_to(rec_event_h, RECORDING_EVENTS, REC_STARTED, (void *)&rec_conf,
                       sizeof(rec_conf), 100);
+    start_rec_timeout_timer(rec_conf.timeout_seconds);
     break;
   case REC_STOP:
+    stop_rec_timeout_timer();
     stop_id = (char *)event_data;
     // Check transaction ID against current configuration
     if (strcmp(rec_conf.transaction_id, stop_id)) {
@@ -880,6 +918,8 @@ esp_err_t vman_stop_recording(void) {
   // Confirm there's a recording in progress
   ESP_GOTO_ON_FALSE(recording, ESP_ERR_INVALID_STATE, fail, TAG,
                     "There's no recording in progress");
+
+  stop_rec_timeout_timer();
 
   // Prevent new frames from being processed
   recording = false;
@@ -1062,6 +1102,13 @@ esp_err_t vman_init(void) {
                                                                ESP_EVENT_ANY_ID, vman_rec_handler,
                                                                NULL, &rec_handler_h),
                       TAG, "Couldn't register recording event handler instance");
+  esp_timer_create_args_t timer_args = {
+      .callback = rec_timeout_cb,
+      .arg      = NULL,
+      .name     = "vman_rec_timeout",
+  };
+  ESP_RETURN_ON_ERROR(esp_timer_create(&timer_args, &s_rec_timeout_timer), TAG,
+                      "Couldn't create recording timeout timer");
   // Done
   initialized = true;
 
@@ -1073,6 +1120,11 @@ esp_err_t vman_deinit(void) {
   ESP_RETURN_ON_ERROR(esp_event_handler_instance_unregister_with(rec_event_h, RECORDING_EVENTS,
                                                                  ESP_EVENT_ANY_ID, rec_handler_h),
                       TAG, "Couldn't unregister recording event handler instance");
+  if (s_rec_timeout_timer) {
+    esp_timer_stop(s_rec_timeout_timer);
+    esp_timer_delete(s_rec_timeout_timer);
+    s_rec_timeout_timer = NULL;
+  }
 
   //---------------FreeRTOS Tasks------------------//
   vTaskDelete(capture);
