@@ -27,7 +27,7 @@ extern "C" {
 ESP_EVENT_DECLARE_BASE(CONFIGURATION_EVENTS);
 
 /**
- * @brief All the possible recording events
+ * @brief All the possible configuration events
  */
 typedef enum configuration_event_t {
   CONF_RECEIVED,  // A new configuration message has been received.
