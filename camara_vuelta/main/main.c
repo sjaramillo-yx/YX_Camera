@@ -49,6 +49,8 @@ cJSON *vmanJSON;
 static int               tcp_idle_s, tcp_interval_s, tcp_retries;
 static TaskHandle_t      mqtt_conf_task_h;
 static SemaphoreHandle_t mqtt_conf_smphr;
+// MQTT status task
+static TaskHandle_t mqtt_status_task_h;
 // Timers
 static TimerHandle_t status_timer_h;
 
@@ -71,13 +73,7 @@ static esp_err_t publish_rec_state() {
 }
 
 /*======================================= Timer Callbacks ========================================*/
-static void publish_status_callback(TimerHandle_t xTimer) {
-  sdman_getJSON(&sdJSON);
-  mqttworker_publish_current_state(sdJSON, vman_is_recording());  // This also frees cJSON memory
-  if (vman_is_recording()) {
-    publish_rec_state();
-  }  // end if
-}
+static void publish_status_callback(TimerHandle_t xTimer) { xTaskNotifyGive(mqtt_status_task_h); }
 /*======================================== FreeRTOS Tasks ========================================*/
 static void mqtt_configure_task(void *args) {
   /// NOTE: This task exists only because a bigger stack is needed to reconfigure the TCP layer.
@@ -97,6 +93,17 @@ static void mqtt_configure_task(void *args) {
   end:
     xSemaphoreGive(mqtt_conf_smphr);
     vTaskDelay(10);
+  }
+}
+
+static void mqtt_publish_status_task(void *args) {
+  while (true) {
+    ulTaskNotifyTake(false, portMAX_DELAY);
+    sdman_getJSON(&sdJSON);
+    mqttworker_publish_current_state(sdJSON, vman_is_recording());  // This also frees cJSON memory
+    if (vman_is_recording()) {
+      publish_rec_state();
+    }
   }
 }
 
@@ -351,6 +358,11 @@ void app_main(void) {
     ESP_LOGE(TAG, "Couldn't create the MQTT TCP Keep Alive configuration task!");
   }
 
+  // Create the status task
+  if (xTaskCreate(mqtt_publish_status_task, "mqtt.status.task", 4096, NULL, 5,
+                  &mqtt_status_task_h) != pdPASS) {
+    ESP_LOGE(TAG, "Couldn't create the MQTT status task!");
+  }
   // Create the status timer
   /// TODO: Turn defaults into KConfig options
   status_timer_h = xTimerCreate("status.timer", 30000, true, NULL, publish_status_callback);
