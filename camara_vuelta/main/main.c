@@ -72,6 +72,17 @@ static esp_err_t publish_rec_state() {
   return ret;
 }
 
+static esp_err_t deinit_peripherals() {
+  ESP_RETURN_ON_ERROR(vman_deinit(), TAG, "Couldn't deinitialize Video Manager");
+  ESP_RETURN_ON_ERROR(sdman_umount(), TAG, "Couldn't unmount the SD card");
+  ESP_RETURN_ON_ERROR(mqttworker_stop(), TAG, "Couldn't stop the MQTT Worker");
+  ESP_RETURN_ON_ERROR(mqttworker_deinit(), TAG, "Couldn't deinitialize the MQTT Worker");
+  ESP_RETURN_ON_ERROR(ethman_deinit(eth_handle), TAG, "Couldn't deinitialize the Ethernet Manager");
+  ESP_RETURN_ON_ERROR(otaman_deinit(), TAG, "Couldn't deinitialize the OTA Manager");
+  ESP_RETURN_ON_ERROR(nvsman_deinit(), TAG, "Couldn't deinitialize the NVS Manager");
+  return ESP_OK;
+}
+
 /*======================================= Timer Callbacks ========================================*/
 static void publish_status_callback(TimerHandle_t xTimer) { xTaskNotifyGive(mqtt_status_task_h); }
 /*======================================== FreeRTOS Tasks ========================================*/
@@ -129,17 +140,6 @@ static void ota_job_received_handler(void *handler_arg, esp_event_base_t event_b
 start_failed:
   esp_event_post_to(OTA_event_h, OTA_EVENTS, OTA_JOB_REJECTED, NULL, 0, 100);
 }
-static void ota_done_handler(void *handler_arg, esp_event_base_t event_base, int32_t event_id,
-                             void *event_data) {
-  vman_deinit();
-  sdman_umount();
-  mqttworker_stop();
-  mqttworker_deinit();
-  ethman_deinit(eth_handle);
-  otaman_deinit();
-  nvsman_deinit();
-  esp_restart();
-}
 
 static void ota_job_error_handler(void *handler_arg, esp_event_base_t event_base, int32_t event_id,
                                   void *event_data) {
@@ -164,14 +164,13 @@ static void conf_received_handler(void *handler_arg, esp_event_base_t event_base
   }
   if (0 > conf->min_sd_free_space_kb || conf->min_sd_free_space_kb > (8ULL << 20)) {
     /// NOTE: This limits the maximum value to 8 GB, but it would be wiser to use SD card size.
-    snprintf(
-        error_msg, sizeof(error_msg),
-        "SD minimum free space value outside limits. Must be greater than %d and lower than %llu.",
-        0, (8ULL << 20));
+    snprintf(error_msg, sizeof(error_msg),
+             "SD minimum free space value outside limits. Must be greater than %d and lower than "
+             "%llu.",
+             0, (8ULL << 20));
     out_event = CONF_REJECTED;
     goto end;
   }
-
   if ((0 > conf->tcp_keep_alive_idle_s && conf->tcp_keep_alive_idle_s > 256) &&
       (0 > conf->tcp_keep_alive_interval_s && conf->tcp_keep_alive_interval_s > 256) &&
       (0 > conf->tcp_keep_alive_retries && conf->tcp_keep_alive_retries > 256)) {
@@ -181,9 +180,7 @@ static void conf_received_handler(void *handler_arg, esp_event_base_t event_base
     goto end;
   }
 
-  ///////////////////////////
-  // Status message period //
-  ///////////////////////////
+  /* Status message period */
   ESP_LOGD(TAG, "Setting the status message period to %d ms", conf->status_period_ms);
   if (xTimerChangePeriod(status_timer_h, pdMS_TO_TICKS(conf->status_period_ms), portMAX_DELAY) !=
       pdPASS) {
@@ -196,15 +193,11 @@ static void conf_received_handler(void *handler_arg, esp_event_base_t event_base
   xTimerReset(status_timer_h, portMAX_DELAY);
   ESP_LOGI(TAG, "New status message period is %d ms", conf->status_period_ms);
 
-  ////////////////////////
-  // SD Card free space //
-  ////////////////////////
+  /* SD Card free space */
   ESP_LOGD(TAG, "Setting minimum free space in SD card to %d KB", conf->min_sd_free_space_kb);
   sdman_set_free_space_target(conf->min_sd_free_space_kb);
 
-  /////////////////////////////////
-  // TCP configuration for MQTT //
-  /////////////////////////////////
+  /* TCP configuration for MQTT */
   ESP_LOGD(TAG, "Setting the TCP Keep Alive idle period to %ds", conf->tcp_keep_alive_idle_s);
   ESP_LOGD(TAG, "Setting the TCP Keep Alive interval to %ds", conf->tcp_keep_alive_interval_s);
   ESP_LOGD(TAG, "Setting the TCP Keep Alive retry count to %d", conf->tcp_keep_alive_retries);
@@ -217,12 +210,16 @@ static void conf_received_handler(void *handler_arg, esp_event_base_t event_base
   xSemaphoreTake(mqtt_conf_smphr, portMAX_DELAY);
 
 end:
-
   esp_event_post_to(conf_event_h, CONFIGURATION_EVENTS, out_event, error_msg, sizeof(error_msg),
                     portMAX_DELAY);
   return;
 }
 
+static void restart_handler(void *handler_arg, esp_event_base_t event_base, int32_t event_id,
+                            void *event_data) {
+  deinit_peripherals();
+  esp_restart();
+}
 /*================================================================================================*/
 /*                                      App entry point                                           */
 /*================================================================================================*/
@@ -295,7 +292,7 @@ void app_main(void) {
   ESP_ERROR_CHECK(esp_event_handler_instance_register_with(
       OTA_event_h, OTA_EVENTS, OTA_JOB_RECEIVED, ota_job_received_handler, NULL, NULL));
   ESP_ERROR_CHECK(esp_event_handler_instance_register_with(OTA_event_h, OTA_EVENTS, OTA_CTRL_DONE,
-                                                           ota_done_handler, NULL, NULL));
+                                                           restart_handler, NULL, NULL));
   ESP_ERROR_CHECK(esp_event_handler_instance_register_with(OTA_event_h, OTA_EVENTS, OTA_JOB_ERROR,
                                                            ota_job_error_handler, NULL, NULL));
   /* Register configuration event loop handlers */
