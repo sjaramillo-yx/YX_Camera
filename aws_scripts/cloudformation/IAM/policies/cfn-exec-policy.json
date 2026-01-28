@@ -1,0 +1,281 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadOnlyDiscovery",
+      "Effect": "Allow",
+      "Action": [
+        "iam:GetRole",
+        "iam:GetRolePolicy",
+        "iam:ListRolePolicies",
+        "iam:ListAttachedRolePolicies",
+        "lambda:GetFunction",
+        "dynamodb:DescribeTable",
+        "iot:GetPolicy",
+        "iot:ListPolicyVersions",
+        "iot:GetTopicRule",
+        "iot:DescribeProvisioningTemplate",
+        "appsync:ListGraphqlApis",
+        "appsync:GetGraphqlApi",
+        "appsync:GetSchemaCreationStatus",
+        "s3:GetBucketLocation",
+        "s3:GetBucketVersioning",
+        "s3:GetBucketPublicAccessBlock",
+        "s3:GetEncryptionConfiguration"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "IamRolesEnvOnly",
+      "Effect": "Allow",
+      "Action": [
+        "iam:CreateRole",
+        "iam:DeleteRole",
+        "iam:UpdateAssumeRolePolicy",
+        "iam:PutRolePolicy",
+        "iam:DeleteRolePolicy",
+        "iam:AttachRolePolicy",
+        "iam:DetachRolePolicy",
+        "iam:TagRole",
+        "iam:UntagRole",
+        "iam:ListInstanceProfilesForRole"
+      ],
+      "Resource": [
+        "arn:aws:iam::${ACCOUNT_ID}:role/${STACK_BASE}-*-${ENV}",
+        "arn:aws:iam::${ACCOUNT_ID}:role/${STACK_BASE}-*-${ENV}-*",
+        "arn:aws:iam::${ACCOUNT_ID}:role/${STACK_BASE}-*-${ENV_GROUP}",
+        "arn:aws:iam::${ACCOUNT_ID}:role/${STACK_BASE}-*-${ENV_GROUP}-*"
+      ]
+    },
+    {
+      "Sid": "AllowInlinePolicyOnYxDeployer",
+      "Effect": "Allow",
+      "Action": [
+        "iam:PutRolePolicy",
+        "iam:DeleteRolePolicy",
+        "iam:GetRolePolicy",
+        "iam:ListRolePolicies"
+      ],
+      "Resource": "arn:aws:iam::${ACCOUNT_ID}:role/yx-deployer-${ENV_GROUP}"
+    },
+    {
+      "Sid": "AllowPassExecRoleToCloudFormationForNestedStacks",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": "arn:aws:iam::${ACCOUNT_ID}:role/cfn-exec-${ENV}",
+      "Condition": {
+        "StringEquals": {
+          "iam:PassedToService": "cloudformation.amazonaws.com"
+        }
+      }
+    },
+    {
+      "Sid": "NestedStacksForThisEnvOnly",
+      "Effect": "Allow",
+      "Action": [
+        "cloudformation:CreateStack",
+        "cloudformation:UpdateStack",
+        "cloudformation:DeleteStack",
+        "cloudformation:CreateChangeSet",
+        "cloudformation:ExecuteChangeSet",
+        "cloudformation:DeleteChangeSet",
+        "cloudformation:Describe*",
+        "cloudformation:List*",
+        "cloudformation:GetTemplateSummary"
+      ],
+      "Resource": [
+        "arn:aws:cloudformation:${REGION}:${ACCOUNT_ID}:stack/${STACK_BASE}-${ENV}-*/*",
+        "arn:aws:cloudformation:${REGION}:${ACCOUNT_ID}:stack/${STACK_BASE}-${ENV}/*"
+      ]
+    },
+    {
+      "Sid": "PassRoleEnvOnly",
+      "Effect": "Allow",
+      "Action": "iam:PassRole",
+      "Resource": [
+        "arn:aws:iam::${ACCOUNT_ID}:role/${STACK_BASE}-*-${ENV}",
+        "arn:aws:iam::${ACCOUNT_ID}:role/${STACK_BASE}-*-${ENV}-*"
+      ],
+      "Condition": {
+        "StringLike": {
+          "iam:PassedToService": [
+            "lambda.amazonaws.com",
+            "iot.amazonaws.com",
+            "appsync.amazonaws.com"
+          ]
+        }
+      }
+    },
+    {
+      "Sid": "LambdaEnvOnly",
+      "Effect": "Allow",
+      "Action": [
+        "lambda:CreateFunction",
+        "lambda:UpdateFunctionCode",
+        "lambda:UpdateFunctionConfiguration",
+        "lambda:InvokeFunction",
+        "lambda:DeleteFunction",
+        "lambda:AddPermission",
+        "lambda:RemovePermission",
+        "lambda:TagResource",
+        "lambda:UntagResource"
+      ],
+      "Resource": [
+        "arn:aws:lambda:${REGION}:${ACCOUNT_ID}:function:${STACK_BASE}_*_${ENV}"
+      ]
+    },
+    {
+      "Sid": "DynamoEnvOnly",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:CreateTable",
+        "dynamodb:UpdateTable",
+        "dynamodb:DeleteTable",
+        "dynamodb:TagResource",
+        "dynamodb:UntagResource"
+      ],
+      "Resource": [
+        "arn:aws:dynamodb:${REGION}:${ACCOUNT_ID}:table/${STACK_BASE}-cam-data-${ENV}"
+      ]
+    },
+    {
+      "Sid": "IoTEnvOnly",
+      "Effect": "Allow",
+      "Action": [
+        "iot:CreateTopicRule",
+        "iot:ReplaceTopicRule",
+        "iot:DeleteTopicRule",
+        "iot:CreatePolicy",
+        "iot:DeletePolicy",
+        "iot:CreatePolicyVersion",
+        "iot:SetDefaultPolicyVersion",
+        "iot:DeletePolicyVersion",
+        "iot:CreateProvisioningTemplate",
+        "iot:CreateProvisioningTemplateVersion",
+        "iot:UpdateProvisioningTemplate",
+        "iot:DeleteProvisioningTemplate",
+        "iot:TagResource",
+        "iot:UntagResource",
+        "iot:ListTagsForResource"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "IamDeleteIotProvisionerRole",
+      "Effect": "Allow",
+      "Action": [
+        "iam:GetRole",
+        "iam:DeleteRole",
+        "iam:ListRolePolicies",
+        "iam:DeleteRolePolicy",
+        "iam:ListAttachedRolePolicies",
+        "iam:DetachRolePolicy",
+        "iam:ListInstanceProfilesForRole",
+        "iam:RemoveRoleFromInstanceProfile"
+      ],
+      "Resource": "arn:aws:iam::${ACCOUNT_ID}:role/${STACK_BASE}-IoT-provisioner-role-${ENVIRONMENT}"
+    },
+    {
+      "Sid": "AppSyncScoped",
+      "Effect": "Allow",
+      "Action": [
+        "appsync:CreateGraphqlApi",
+        "appsync:UpdateGraphqlApi",
+        "appsync:DeleteGraphqlApi",
+        "appsync:GetGraphqlApi",
+        "appsync:StartSchemaCreation",
+        "appsync:GetSchemaCreationStatus",
+        "appsync:CreateApiKey",
+        "appsync:UpdateApiKey",
+        "appsync:DeleteApiKey",
+        "appsync:ListApiKeys",
+        "appsync:CreateResolver",
+        "appsync:UpdateResolver",
+        "appsync:DeleteResolver",
+        "appsync:ListResolvers",
+        "appsync:CreateDataSource",
+        "appsync:UpdateDataSource",
+        "appsync:DeleteDataSource",
+        "appsync:GetDataSource",
+        "appsync:ListDataSources",
+        "appsync:CreateFunction",
+        "appsync:UpdateFunction",
+        "appsync:DeleteFunction",
+        "appsync:GetFunction",
+        "appsync:TagResource",
+        "appsync:UntagResource",
+        "appsync:ListTagsForResource"
+      ],
+      "Resource": [
+        "arn:aws:appsync:${REGION}:${ACCOUNT_ID}:apis/*",
+        "arn:aws:appsync:${REGION}:${ACCOUNT_ID}:/v1/apis/*"
+      ]
+    },
+    {
+      "Sid": "AppSyncCreateDataSourceGlobal",
+      "Effect": "Allow",
+      "Action": [
+        "appsync:CreateDataSource",
+        "appsync:UpdateDataSource"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "AllowCreateAppSyncServiceLinkedRole",
+      "Effect": "Allow",
+      "Action": "iam:CreateServiceLinkedRole",
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "iam:AWSServiceName": "appsync.amazonaws.com"
+        }
+      }
+    },
+    {
+      "Sid": "S3CreateBucket",
+      "Effect": "Allow",
+      "Action": "s3:CreateBucket",
+      "Resource": "*"
+    },
+    {
+      "Sid": "S3ConfigureEnvCameraDataBucket",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetBucketLocation",
+        "s3:PutBucketVersioning",
+        "s3:PutBucketPublicAccessBlock",
+        "s3:PutEncryptionConfiguration",
+        "s3:PutBucketTagging",
+        "s3:PutBucketOwnershipControls",
+        "s3:PutBucketPolicy",
+        "s3:PutBucketAcl"
+      ],
+      "Resource": [
+        "arn:aws:s3:::${LOWERCASE_STACK_BASE}-${ENV}-${ACCOUNT_ID}-${REGION}-camera-data"
+      ]
+    },
+    {
+      "Sid": "ArtifactsBucketReadObjects",
+      "Effect": "Allow",
+      "Action": [
+        "s3:GetObject",
+        "s3:GetObjectVersion"
+      ],
+      "Resource": "arn:aws:s3:::cfn-artifacts-${ACCOUNT_ID}-${REGION}/*"
+    },
+    {
+      "Sid": "ArtifactsBucketList",
+      "Effect": "Allow",
+      "Action": "s3:ListBucket",
+      "Resource": "arn:aws:s3:::cfn-artifacts-${ACCOUNT_ID}-${REGION}"
+    },
+    {
+      "Sid": "AllowCfnDescribeEventsForTroubleshooting",
+      "Effect": "Allow",
+      "Action": [
+        "cloudformation:DescribeEvents"
+      ],
+      "Resource": "*"
+    }
+  ]
+}

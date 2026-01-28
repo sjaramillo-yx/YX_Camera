@@ -1,0 +1,227 @@
+/**
+ * @file provision_claimer.c
+ * @date September 2025
+ * @author Simón Jaramillo <sjaramillo@yx.cl>
+ *
+ * @ingroup mqtt_worker
+ */
+#include "provision_claimer.h"
+
+/*-------- Globals ---------*/
+/// TODO: Remove static memory and move to dynamic heap allocations
+/**
+ * @brief Logging tag for this module
+ */
+static const char *TAG = "Provision Claimer";
+/**
+ * @brief The current state of the state machine
+ */
+static ClaimerState claimer_state = UNINITIALIZED;
+/**
+ * @brief A structure for MQTT arguments passed to the provisioning tasks
+ */
+static mqtt_args_t mqtt_args = {0};
+/**
+ * @brief The token that proves ownership of the received certificate
+ */
+static char ownership_tkn[1024];
+/**
+ * @brief The obtained certificate data.
+ */
+static cert_data_t *obtained_certs;
+/**
+ * @brief The Task handle for the provisioning task
+ */
+static TaskHandle_t provision_handle;
+
+static SemaphoreHandle_t provisioning_semphr;
+
+/* ---------- MQTT handlers ---------- */
+/**
+ * @brief The handler for the `MQTT_EVENT_CONNECTED` event
+ *
+ * @param handler_args user data registered to the event.
+ * @param base Event base for the handler(always MQTT Base in this case).
+ * @param event_id The id for the received event.
+ * @param event_data The data for the event, esp_mqtt_event_handle_t.
+ */
+static void mqtt_connected_handler(void *handler_args, esp_event_base_t base, int32_t event_id,
+                                   void *event_data) {
+  ESP_LOGD(TAG, "Connected to MQTT broker");
+  esp_mqtt_event_handle_t  event  = event_data;
+  esp_mqtt_client_handle_t client = event->client;
+  switch (claimer_state) {
+  case UNINITIALIZED:
+    esp_mqtt_client_subscribe(client, "$aws/certificates/create/json/accepted", 0);
+    esp_mqtt_client_subscribe(client, "$aws/certificates/create/json/rejected", 0);
+    break;
+  case GOT_CERTIFICATE:
+    esp_mqtt_client_subscribe(client,
+                              "$aws/provisioning-templates/" CONFIG_PROJ_BASE_NAME
+                              "-" CONFIG_TEMPLATE_NAME "-" CONFIG_PROJ_ENV_NAME
+                              "/provision/json/accepted",
+                              0);
+    esp_mqtt_client_subscribe(client,
+                              "$aws/provisioning-templates/" CONFIG_PROJ_BASE_NAME
+                              "-" CONFIG_TEMPLATE_NAME "-" CONFIG_PROJ_ENV_NAME
+                              "/provision/json/rejected",
+                              0);
+    break;
+  default:
+    break;
+  }
+}
+
+/**
+ * @brief The handler for the `MQTT_EVENT_SUBSCRIBED` event
+ *
+ * @param handler_args user data registered to the event.
+ * @param base Event base for the handler(always MQTT Base in this case).
+ * @param event_id The id for the received event.
+ * @param event_data The data for the event, esp_mqtt_event_handle_t.
+ */
+static void mqtt_subscribed_handler(void *handler_args, esp_event_base_t base, int32_t event_id,
+                                    void *event_data) {
+  ESP_LOGD(TAG, "Subscribed to MQTT topic, state is 0x%01x", claimer_state);
+  esp_mqtt_event_handle_t  event  = event_data;
+  esp_mqtt_client_handle_t client = event->client;
+  int                      msg_id;
+  cJSON                   *payload     = cJSON_CreateObject();
+  cJSON                   *parameters  = cJSON_CreateObject();
+  uint8_t                  mac_addr[6] = {0};
+  char                     serial_num[7];
+  switch (claimer_state) {
+  case UNINITIALIZED:
+    claimer_state = SUSCRIBED_CERT_CREATION;
+    // Attempt to create a new certificate
+    msg_id = esp_mqtt_client_publish(client, "$aws/certificates/create/json", NULL, 0, 1, 0);
+    ESP_LOGD(TAG, "sent publish successful, msg_id=%d", msg_id);
+    break;
+  case GOT_CERTIFICATE:
+    claimer_state = SUSCRIBED_THING_CREATION;
+    /* get MAC address */
+    esp_efuse_mac_get_default(mac_addr);
+    ESP_LOGD(TAG, "Ethernet MAC Address: %02x:%02x:%02x:%02x:%02x:%02x", mac_addr[0], mac_addr[1],
+             mac_addr[2], mac_addr[3], mac_addr[4], mac_addr[5]);
+    snprintf(serial_num, sizeof(serial_num), "%02x%02x%02x", mac_addr[3], mac_addr[4], mac_addr[5]);
+    ESP_LOGD(TAG, "Serial number from MAC: %s", serial_num);
+    // Attempt to create a new Thing
+    cJSON_AddStringToObject(payload, "certificateOwnershipToken", ownership_tkn);
+    cJSON_AddStringToObject(parameters, "SerialNumber", serial_num);
+    cJSON_AddItemToObjectCS(payload, "parameters", parameters);
+    msg_id =
+        esp_mqtt_client_publish(client,
+                                "$aws/provisioning-templates/" CONFIG_PROJ_BASE_NAME
+                                "-" CONFIG_TEMPLATE_NAME "-" CONFIG_PROJ_ENV_NAME "/provision/json",
+                                cJSON_Print(payload), 0, 1, 0);
+    ESP_LOGD(TAG, "sent publish successful, msg_id=%d", msg_id);
+    break;
+  default:
+    break;
+  }
+  if (payload)
+    cJSON_Delete(payload);
+}
+
+/**
+ * @brief The handler for the `MQTT_EVENT_DATA` event
+ *
+ * @param handler_args user data registered to the event.
+ * @param base Event base for the handler(always MQTT Base in this case).
+ * @param event_id The id for the received event.
+ * @param event_data The data for the event, esp_mqtt_event_handle_t.
+ */
+static void mqtt_data_handler(void *handler_args, esp_event_base_t base, int32_t event_id,
+                              void *event_data) {
+  ESP_LOGD(TAG, "Received data");
+  esp_mqtt_event_handle_t  event   = event_data;
+  esp_mqtt_client_handle_t client  = event->client;
+  cJSON                   *payload = cJSON_Parse(event->data);
+  cJSON                   *token, *cert, *certId, *key, *new_thing_name;
+  switch (claimer_state) {
+  case SUSCRIBED_CERT_CREATION:
+    claimer_state = GOT_CERTIFICATE;
+    // Extract certificate from payload
+    /// TODO: Handle errors or missing items
+    token  = cJSON_GetObjectItem(payload, "certificateOwnershipToken");
+    cert   = cJSON_GetObjectItem(payload, "certificatePem");
+    key    = cJSON_GetObjectItem(payload, "privateKey");
+    certId = cJSON_GetObjectItem(payload, "certificateId");
+    snprintf(ownership_tkn, sizeof(ownership_tkn), "%s", token->valuestring);
+    ESP_LOGD(TAG, "certificateOwnershipToken=%s", ownership_tkn);
+    // Update client configuration
+    strlcpy(obtained_certs->client_crt, cert->valuestring, sizeof(obtained_certs->client_crt));
+    strlcpy(obtained_certs->cert_id, certId->valuestring, sizeof(obtained_certs->cert_id));
+    strlcpy(obtained_certs->client_key, key->valuestring, sizeof(obtained_certs->client_key));
+    // Suscribe to Thing creation reserved topics
+    esp_mqtt_client_subscribe(client,
+                              "$aws/provisioning-templates/" CONFIG_PROJ_BASE_NAME
+                              "-" CONFIG_TEMPLATE_NAME "-" CONFIG_PROJ_ENV_NAME
+                              "/provision/json/accepted",
+                              0);
+    esp_mqtt_client_subscribe(client,
+                              "$aws/provisioning-templates/" CONFIG_PROJ_BASE_NAME
+                              "-" CONFIG_TEMPLATE_NAME "-" CONFIG_PROJ_ENV_NAME
+                              "/provision/json/rejected",
+                              0);
+    break;
+  case SUSCRIBED_THING_CREATION:
+    /// TODO: Handle errors
+    claimer_state = CREATED_THING;
+    // Extract thing name
+    new_thing_name = cJSON_GetObjectItem(payload, "thingName");
+    ESP_LOGI(TAG, "Thing Name = %s", new_thing_name->valuestring);
+    strlcpy(obtained_certs->thing_name, new_thing_name->valuestring,
+            sizeof(obtained_certs->thing_name));
+    xTaskNotifyGive(provision_handle);
+    break;
+  default:
+    break;
+  }
+  if (payload)
+    cJSON_Delete(payload);
+}
+
+/*--------------- FreeRTOS Tasks ---------------*/
+static void provision_task(void *p) {
+  esp_mqtt_client_handle_t client = p;
+  if (client == NULL) {
+    ESP_LOGE(TAG, "MQTT client handle is empty!");
+    abort();
+  }
+  /* Register the event handlers */
+  esp_mqtt_client_register_event(client, MQTT_EVENT_CONNECTED, mqtt_connected_handler, NULL);
+  esp_mqtt_client_register_event(client, MQTT_EVENT_SUBSCRIBED, mqtt_subscribed_handler, NULL);
+  esp_mqtt_client_register_event(client, MQTT_EVENT_DATA, mqtt_data_handler, NULL);
+  /* Start MQTT event loop */
+  esp_mqtt_client_start(client);
+
+  /* Wait for this task to be notified */
+  ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+  /* Write to NVS */
+  nvsman_save_certs(obtained_certs);
+
+  /* Close the MQTT client */
+  esp_mqtt_client_disconnect(client);
+  esp_mqtt_client_stop(client);
+  esp_mqtt_client_destroy(client);
+
+  /* Signal the end of provisioning by giving the semaphore */
+  xSemaphoreGive(provisioning_semphr);
+
+  /* Delete this task */
+  vTaskDelete(NULL);
+}
+
+/*--------- Functions ----------*/
+esp_err_t provision_begin(esp_mqtt_client_handle_t mqtt_client, cert_data_t *cert_data) {
+  obtained_certs          = cert_data;
+  provisioning_semphr     = xSemaphoreCreateBinary();
+  BaseType_t task_created = xTaskCreate(provision_task, "BeginProvision", 4096, (void *)mqtt_client,
+                                        5, &provision_handle);
+  /// TODO: Handle task not created event here
+  xSemaphoreTake(provisioning_semphr, portMAX_DELAY);
+  /// TODO: Check that the semaphore was correctly taken
+  return (task_created == pdTRUE ? ESP_OK : ESP_FAIL);
+}

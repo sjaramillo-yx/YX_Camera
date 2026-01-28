@@ -1,0 +1,32 @@
+# General options
+IndentWidth: 2
+TabWidth: 2
+UseTab: Never
+ColumnLimit: 100
+BinPackArguments: true
+
+# Comments
+AlignTrailingComments: true
+SpacesBeforeTrailingComments: 2
+
+# Spacing
+SpaceBeforeParens: ControlStatements
+SpaceBeforeAssignmentOperators: true
+
+AlignConsecutiveAssignments:
+  Enabled: true
+  AcrossEmptyLines: false     # don't align past blank lines
+  AcrossComments: false       # stop alignment groups at comments
+  AlignCompound: true         # also align for +=, -=, etc.
+
+AlignConsecutiveDeclarations: 
+  Enabled: true
+  AcrossEmptyLines: false     # don't align past blank lines
+  AcrossComments: false       # stop alignment groups at comments
+  AlignCompound: true         # also align for +=, -=, etc.
+
+AlignConsecutiveMacros:
+  Enabled: true
+  AcrossEmptyLines: false     # don't align past blank lines
+  AcrossComments: false       # stop alignment groups at comments
+  AlignCompound: true         # also align for +=, -=, etc.

@@ -1,0 +1,64 @@
+menu "VueltaCam configuration"
+
+config PROJ_BASE_NAME
+    string "Name of the project"
+    default "yxcam"
+    help
+        This name should match the CloudFormation stack base name in AWS.
+
+config AWS_ENDPOINT
+    string "The AWS IoT Core endpoint to be used"
+    default  ""
+
+menu "AWS IoT Certificates"
+
+config AWS_IOT_CERT_PEM_PATH
+    string "Device certificate PEM path"
+    default ""
+    help
+        Absolute path to device certificate PEM file. Not stored in firmware; only used at build time.
+
+config AWS_IOT_PRIV_KEY_PATH
+    string "Device private key path"
+    default ""
+    help
+        Absolute path to device private key PEM file. Not stored in firmware; only used at build time.
+
+config AWS_IOT_ROOT_CA_PATH
+    string "Root CA PEM path"
+    default ""
+    help
+        Absolute path to root CA PEM file. Not stored in firmware; only used at build time.
+
+config AWS_IOT_OTA_PUB_KEY_PATH
+    string "OTA codesigning public key PEM path"
+    default ""
+    help
+        Absolute path to code signing public key PEM file. Not stored in firmware; only used at build time.
+
+endmenu
+
+choice PROJ_ENV_CHOICE
+    prompt "Build environment"
+    default PROJ_ENV_DEV
+    help
+      Select the target environment for this firmware build.
+      Code can check CONFIG_PROJ_ENV_DEV/TEST/PROD or the
+      derived CONFIG_PROJ_ENV_NAME string.
+config PROJ_ENV_DEV
+    bool "dev"
+config PROJ_ENV_TEST
+    bool "test"
+config PROJ_ENV_PROD
+    bool "prod"
+endchoice
+
+config PROJ_ENV_NAME
+    string "Selected environment (derived)"
+    default "dev"  if PROJ_ENV_DEV
+    default "test" if PROJ_ENV_TEST
+    default "prod" if PROJ_ENV_PROD
+    help
+      Convenience string matching the selected environment.
+
+endmenu

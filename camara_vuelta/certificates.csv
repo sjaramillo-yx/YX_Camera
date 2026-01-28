@@ -1,0 +1,6 @@
+key,type,encoding,value
+provisioning,namespace,,
+client_crt,file,string,@AWS_IOT_CERT_PEM@
+client_key,file,string,@AWS_IOT_PRIV_KEY@
+root_ca,file,string,@AWS_IOT_ROOT_CA@
+ota_key,file,string,@AWS_IOT_OTA_PUB_KEY@

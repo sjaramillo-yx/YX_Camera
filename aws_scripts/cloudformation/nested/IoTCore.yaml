@@ -1,0 +1,287 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: IoT core (policies, provisioner role, fleet provisioning template).
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, test, prod]
+  ParentStackName:
+    Type: String
+  OtaArtifactsBucketName:
+    Type: String
+    Description: S3 bucket that stores OTA firmware artifacts (objects read by AWS IoT OTA).
+
+
+Resources:
+  IoTCameraPolicy:
+    Type: AWS::IoT::Policy
+    Properties:
+      PolicyName: !Sub "${ParentStackName}-cameraPolicy-${Environment}"
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Action: iot:Connect
+          Resource: '*'
+        - Effect: Allow
+          Action: iot:Publish
+          Resource: !Sub arn:aws:iot:*:*:topic/${ParentStackName}/${Environment}/cameras/hello
+        - Effect: Allow
+          Action: iot:Publish
+          Resource: !Sub arn:aws:iot:*:*:topic/${ParentStackName}/${Environment}/cameras/status
+        - Effect: Allow
+          Action: iot:Subscribe
+          Resource: arn:aws:iot:*:*:topicfilter/$aws/things/${iot:Connection.Thing.ThingName}/*
+        - Effect: Allow
+          Action: iot:Receive
+          Resource: arn:aws:iot:*:*:topic/$aws/things/${iot:Connection.Thing.ThingName}/*
+        - Effect: Allow
+          Action: iot:Publish
+          Resource: arn:aws:iot:*:*:topic/$aws/things/${iot:Connection.Thing.ThingName}/*
+        - Effect: Allow
+          Action: iot:Subscribe
+          Resource: !Sub arn:aws:iot:*:*:topicfilter/${ParentStackName}/${Environment}/recordings/${!iot:Connection.Thing.ThingName}/*
+        - Effect: Allow
+          Action: iot:Receive
+          Resource: !Sub arn:aws:iot:*:*:topic/${ParentStackName}/${Environment}/recordings/${!iot:Connection.Thing.ThingName}/*
+        - Effect: Allow
+          Action: iot:Publish
+          Resource: !Sub arn:aws:iot:*:*:topic/${ParentStackName}/${Environment}/recordings/${!iot:Connection.Thing.ThingName}/*
+        - Effect: Allow
+          Action: iot:Subscribe
+          Resource: !Sub arn:aws:iot:*:*:topicfilter/${ParentStackName}/${Environment}/uploads/${!iot:Connection.Thing.ThingName}/*
+        - Effect: Allow
+          Action: iot:Receive
+          Resource: !Sub arn:aws:iot:*:*:topic/${ParentStackName}/${Environment}/uploads/${!iot:Connection.Thing.ThingName}/*
+        - Effect: Allow
+          Action: iot:Publish
+          Resource: !Sub arn:aws:iot:*:*:topic/${ParentStackName}/${Environment}/uploads/${!iot:Connection.Thing.ThingName}/*
+        - Effect: Allow
+          Action: iot:Subscribe
+          Resource: !Sub arn:aws:iot:*:*:topicfilter/${ParentStackName}/${Environment}/cameras/${!iot:Connection.Thing.ThingName}/*
+        - Effect: Allow
+          Action: iot:Receive
+          Resource: !Sub arn:aws:iot:*:*:topic/${ParentStackName}/${Environment}/cameras/${!iot:Connection.Thing.ThingName}/*
+        - Effect: Allow
+          Action: iot:Publish
+          Resource: !Sub arn:aws:iot:*:*:topic/${ParentStackName}/${Environment}/cameras/${!iot:Connection.Thing.ThingName}/*
+
+  IoTProvisionerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ParentStackName}-IoT-provisioner-role-${Environment}"
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: iot.amazonaws.com
+          Action: sts:AssumeRole
+
+      Policies:
+        - PolicyName: IoTProvisioningActions
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: Provisioning
+                Effect: Allow
+                Action:
+                  - iot:CreateThing
+                  - iot:RegisterThing
+                  - iot:DescribeThing
+                  - iot:UpdateThing
+                  - iot:ListThingGroupsForThing
+                  - iot:AttachThingPrincipal
+                  - iot:GetPolicy
+                  - iot:AttachPolicy
+                  - iot:AttachPrincipalPolicy 
+                  - iot:CreateKeysAndCertificate
+                  - iot:UpdateCertificate
+                  - iot:DescribeCertificate
+                Resource: "*"
+
+  IoTFleetProvisioningTemplate:
+    Type: AWS::IoT::ProvisioningTemplate
+    Properties:
+      TemplateName: !Sub "${ParentStackName}-cameraTemplate-${Environment}"
+      Enabled: true
+      ProvisioningRoleArn: !GetAtt IoTProvisionerRole.Arn
+      TemplateBody: !Sub |
+        {
+          "Parameters": {
+            "SerialNumber": {
+              "Type": "String"
+            },
+            "AWS::IoT::Certificate::Id": {
+              "Type": "String"
+            }
+          },
+          "Resources": {
+            "policy_cameraPolicy": {
+              "Type": "AWS::IoT::Policy",
+              "Properties": {
+                "PolicyName": "${ParentStackName}-cameraPolicy-${Environment}"
+              }
+            },
+            "certificate": {
+              "Type": "AWS::IoT::Certificate",
+              "Properties": {
+                "CertificateId": {
+                  "Ref": "AWS::IoT::Certificate::Id"
+                },
+                "Status": "Active",
+                "ThingPrincipalType": "EXCLUSIVE_THING"
+              }
+            },
+            "thing": {
+              "Type": "AWS::IoT::Thing",
+              "OverrideSettings": {
+                "AttributePayload": "MERGE",
+                "ThingGroups": "DO_NOTHING",
+                "ThingTypeName": "REPLACE"
+              },
+              "Properties": {
+                "AttributePayload": {},
+                "ThingGroups": [],
+                "ThingName": {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "${ParentStackName}_${Environment}_",
+                      {
+                        "Ref": "SerialNumber"
+                      }
+                    ]
+                  ]
+                }
+              }
+            }
+          }
+        }
+
+  IoTProvisioningPolicy:
+    Type: AWS::IoT::Policy
+    Properties:
+      PolicyName: !Sub "${ParentStackName}-provisioningPolicy-${Environment}"
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Action: iot:Connect
+            Resource: "*"
+
+          - Effect: Allow
+            Action:
+              - iot:Publish
+              - iot:Receive
+            Resource:
+              - "arn:aws:iot:*:*:topic/$aws/certificates/create/json"
+              - "arn:aws:iot:*:*:topic/$aws/certificates/create/json/accepted"
+              - "arn:aws:iot:*:*:topic/$aws/certificates/create/json/rejected"
+              - !Sub
+                - "arn:aws:iot:*:*:topic/$aws/provisioning-templates/${Tpl}/provision/json"
+                - { Tpl: !Ref IoTFleetProvisioningTemplate }
+              - !Sub
+                - "arn:aws:iot:*:*:topic/$aws/provisioning-templates/${Tpl}/provision/json/accepted"
+                - { Tpl: !Ref IoTFleetProvisioningTemplate }
+              - !Sub
+                - "arn:aws:iot:*:*:topic/$aws/provisioning-templates/${Tpl}/provision/json/rejected"
+                - { Tpl: !Ref IoTFleetProvisioningTemplate }
+
+          - Effect: Allow
+            Action: iot:Subscribe
+            Resource:
+              - "arn:aws:iot:*:*:topicfilter/$aws/certificates/create/json/accepted"
+              - "arn:aws:iot:*:*:topicfilter/$aws/certificates/create/json/rejected"
+              - !Sub
+                - "arn:aws:iot:*:*:topicfilter/$aws/provisioning-templates/${Tpl}/provision/json/accepted"
+                - { Tpl: !Ref IoTFleetProvisioningTemplate }
+              - !Sub
+                - "arn:aws:iot:*:*:topicfilter/$aws/provisioning-templates/${Tpl}/provision/json/rejected"
+                - { Tpl: !Ref IoTFleetProvisioningTemplate }
+
+  IoTOtaServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ParentStackName}-IoT-ota-service-role-${Environment}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: iot.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonFreeRTOSOTAUpdate  # AWS-managed
+
+      Policies:
+        - PolicyName: IoTOtaServiceActions
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # Read firmware binaries/manifests from S3
+              - Sid: ReadOtaArtifacts
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                Resource: !Sub "arn:aws:s3:::${OtaArtifactsBucketName}/firmware/*/unsigned/*"
+              
+              - Sid: WriteSignedImages
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                Resource: !Sub "arn:aws:s3:::${OtaArtifactsBucketName}/firmware/*/signed/*"
+
+              # Allow IoT to validate/access the bucket itself
+              - Sid: ReadOtaArtifactsBucket
+                Effect: Allow
+                Action:
+                  - s3:GetBucketLocation
+                  - s3:ListBucket
+                  - s3:ListBucketVersions
+                Resource: !Sub "arn:aws:s3:::${OtaArtifactsBucketName}"
+                Condition:
+                   StringLikeIfExists:
+                    s3:prefix:
+                      - ""
+                      - "firmware/*"
+                      - "firmware/unsigned/*"
+                      - "firmware/signed/*"
+
+              - Sid: S3BucketIntrospection
+                Effect: Allow
+                Action:
+                  - s3:GetBucketLocation
+                  - s3:GetBucketVersioning
+                Resource:
+                  - !Sub "arn:aws:s3:::${OtaArtifactsBucketName}"
+
+              - Sid: AllowSelfPassRoleToIot
+                Effect: Allow
+                Action:
+                  - iam:GetRole
+                  - iam:PassRole
+                Resource: !Sub "arn:aws:iam::${AWS::AccountId}:role/${ParentStackName}-IoT-ota-service-role-${Environment}"
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: iot.amazonaws.com
+
+
+
+
+Outputs:
+  CameraPolicyName:
+    Value: !Ref IoTCameraPolicy
+  ProvisioningPolicyName:
+    Value: !Ref IoTProvisioningPolicy
+  ProvisioningTemplateName:
+    Value: !Ref IoTFleetProvisioningTemplate
+  ProvisionerRoleArn:
+    Value: !GetAtt IoTProvisionerRole.Arn
+  OtaServiceRoleArn:
+    Value: !GetAtt IoTOtaServiceRole.Arn
+  OtaServiceRoleName:
+    Value: !Ref IoTOtaServiceRole

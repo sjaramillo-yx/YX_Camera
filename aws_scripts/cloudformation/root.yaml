@@ -1,0 +1,142 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: VueltaCam AWS stack with nested stacks for each resource.
+
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues:
+      - dev
+      - test
+      - prod
+  
+  LowercaseStackName:
+    Type: String
+
+  BootstrapTrigger:
+    Type: String
+    Default: "0"
+
+Conditions:
+  IsProd: !Equals [!Ref Environment, prod]
+
+Resources:
+  DynamoStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: nested/dynamoDB.yaml
+      Parameters:
+        ParentStackName: !Select [0, !Split ["-", !Ref "AWS::StackName"]]  # foo
+        Environment: !Ref Environment
+
+  IoTRulesStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: [
+      DynamoStack,
+      CameraDataBucket
+    ]
+    Properties:
+      TemplateURL: nested/IoTRules.yaml
+      Parameters:
+        ParentStackName: !Select [0, !Split ["-", !Ref "AWS::StackName"]]  # foo
+        Environment: !Ref Environment
+        DynamoTableName: !GetAtt DynamoStack.Outputs.TableName
+        DynamoTableArn: !GetAtt DynamoStack.Outputs.TableArn
+        DynamoRoleArn: !GetAtt DynamoStack.Outputs.IoTRuleRoleArn
+        UploadBucketName: !Ref CameraDataBucket
+  
+  IoTCoreStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: [
+      CameraDataBucket
+    ]
+    Properties:
+      TemplateURL: nested/IoTCore.yaml
+      Parameters:
+        ParentStackName: !Select [0, !Split ["-", !Ref "AWS::StackName"]]  # foo
+        Environment: !Ref Environment
+        OtaArtifactsBucketName: !Ref CameraDataBucket # Note: If firmware will be uploaded to another bucket, change this parameter to match
+  
+  CameraDataBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      BucketName: !Sub "${LowercaseStackName}-${Environment}-${AWS::AccountId}-${AWS::Region}-camera-data"
+
+      VersioningConfiguration:
+        Status: Enabled
+
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        IgnorePublicAcls: true
+        BlockPublicPolicy: true
+        RestrictPublicBuckets: true
+
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+  
+  CodeSigningStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: nested/codeSigning.yaml
+      Parameters:
+        ParentStackName: !Select [0, !Split ["-", !Ref "AWS::StackName"]]
+        Environment: !Ref Environment
+        SigningProfileName: !Sub
+          - "${ParentStackName}_codesigner_${Environment}"
+          - { ParentStackName: !Select [0, !Split ["-", !Ref "AWS::StackName"]] }
+        CertArnSsmParamName: !Sub
+          - "/vuelta-cam/${ParentStackName}/${Environment}/codesign/certArn"
+          - { ParentStackName: !Select [0, !Split ["-", !Ref "AWS::StackName"]] }
+        BootstrapTrigger: !Ref BootstrapTrigger
+
+  OtaAdminStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: [
+      CameraDataBucket,
+      IoTCoreStack,
+      CodeSigningStack
+    ]
+    Properties:
+      TemplateURL: nested/otaAdmin.yaml
+      Parameters:
+        ParentStackName: !Select [0, !Split ["-", !Ref "AWS::StackName"]]
+        Environment: !Ref Environment
+        CameraDataBucketName: !Ref CameraDataBucket
+        OtaServiceRoleArn: !GetAtt IoTCoreStack.Outputs.OtaServiceRoleArn
+        SigningProfileName: !GetAtt CodeSigningStack.Outputs.SigningProfileName
+        UnsignedPrefix: firmware/unsigned/
+        SignedPrefix: firmware/signed/
+
+  AppSyncStack:
+    Type: AWS::CloudFormation::Stack
+    DependsOn: [DynamoStack, OtaAdminStack]
+    Properties:
+      TemplateURL: nested/appSync.yaml
+      Parameters:
+        ParentStackName: !Select [0, !Split ["-", !Ref "AWS::StackName"]]  # foo
+        Environment: !Ref Environment
+        DynamoTableName: !GetAtt DynamoStack.Outputs.TableName
+        DynamoTableArn: !GetAtt DynamoStack.Outputs.TableArn
+        AuthType: API_KEY # optional (AWS_IAM or API_KEY)
+        OtaAdminLambdaArn: !GetAtt OtaAdminStack.Outputs.OtaAdminLambdaArn
+
+
+Outputs:
+  RootStackName:
+    Value: !Ref AWS::StackName
+  DynamoTableName:
+    Value: !GetAtt DynamoStack.Outputs.TableName
+  IotRuleRoleArn:
+    Value: !GetAtt DynamoStack.Outputs.IoTRuleRoleArn
+  UpdateOngoingRecordingLambdaArn:
+    Value: !GetAtt IoTRulesStack.Outputs.UpdateOngoingRecordingLambdaArn
+  CameraDataBucketName:
+    Value: !Ref CameraDataBucket
+  CameraDataBucketArn:
+    Value: !GetAtt CameraDataBucket.Arn
+  CodeSigningCertificateArn:
+    Value: !GetAtt CodeSigningStack.Outputs.CodeSigningCertificateArn

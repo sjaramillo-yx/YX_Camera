@@ -1,0 +1,102 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Code signing bootstrap (ACM import + AWS Signer profile) for FreeRTOS OTA
+
+Parameters:
+  Environment:
+    Type: String
+    AllowedValues: [dev, test, prod]
+
+  ParentStackName:
+    Type: String
+
+  SigningPlatformId:
+    Type: String
+    Default: AmazonFreeRTOS-Default
+
+  SigningProfileName:
+    Type: String
+    Description: Name of the AWS Signer signing profile to ensure exists
+
+  CertArnSsmParamName:
+    Type: String
+
+  BootstrapTrigger:
+    Type: String
+    Default: "0"
+    Description: Change this value to force the Custom Resource to re-run.
+    Description: SSM parameter name where the ACM certificate ARN is stored (idempotency)
+
+Resources:
+  CodeSigningBootstrapRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${ParentStackName}-codesign-bootstrap-${Environment}"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: CodeSigningBootstrap
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ACM
+                Effect: Allow
+                Action:
+                  - acm:ImportCertificate
+                  - acm:DescribeCertificate
+                  - acm:AddTagsToCertificate
+                Resource: "*"
+              - Sid: SSM
+                Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:PutParameter
+                Resource: "*"
+              - Sid: Signer
+                Effect: Allow
+                Action:
+                  - signer:GetSigningProfile
+                  - signer:PutSigningProfile
+                  - signer:ListSigningProfiles
+                Resource: "*"
+
+  CodeSigningBootstrapFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${ParentStackName}_codesign_bootstrap_${Environment}"
+      Role: !GetAtt CodeSigningBootstrapRole.Arn
+      Runtime: python3.12
+      Handler: src/lambda_function.lambda_handler
+      Timeout: 90
+      MemorySize: 256
+      Environment:
+        Variables:
+          CERT_PARAM_NAME: !Ref CertArnSsmParamName
+          SIGNING_PROFILE_NAME: !Ref SigningProfileName
+          SIGNING_PLATFORM_ID: !Ref SigningPlatformId
+          CERT_COMMON_NAME: !Sub "${ParentStackName}-codesigncert-${Environment}"
+      Code: lambda/CodeSignBootstrap.zip
+
+  CodeSigningBootstrapCustomResource:
+    Type: Custom::CodeSigningBootstrap
+    Properties:
+      ServiceToken: !GetAtt CodeSigningBootstrapFunction.Arn
+      Environment: !Ref Environment
+      ParentStackName: !Ref ParentStackName
+      SigningPlatformId: !Ref SigningPlatformId
+      ProfileName: !Ref SigningProfileName
+      CertArnParam: !Ref CertArnSsmParamName
+      BootstrapTrigger: !Ref BootstrapTrigger
+
+
+Outputs:
+  CodeSigningCertificateArn:
+    Value: !GetAtt CodeSigningBootstrapCustomResource.CertificateArn
+  SigningProfileName:
+    Value: !Ref SigningProfileName

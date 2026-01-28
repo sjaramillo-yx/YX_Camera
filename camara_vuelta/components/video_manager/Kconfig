@@ -1,0 +1,19 @@
+menu "Video Manager"
+
+  menu "Staging Buffer Configurations"
+      config VMAN_STAGE_SIZE_KB
+        int "Size of the staging buffers (in kB)"
+        range 1024 4096
+        default 3072
+      
+      config VMAN_STAGE_LIMIT
+        int "Occupancy limit for staging buffers before flushing (in %)"
+        range 50 90
+        default 70
+      
+      config VMAN_STAGE_ALIGNMENT
+        int "Bit alignment for stage writes"
+        default 65536
+  endmenu
+
+endmenu

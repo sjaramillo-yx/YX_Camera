@@ -1,0 +1,30 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ListTablesAccountWide",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:ListTables"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "ManageCamDataTablesAndIndexes",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:CreateTable",
+        "dynamodb:UpdateTable",
+        "dynamodb:DescribeTable",
+        "dynamodb:GetItem",
+        "dynamodb:Scan"
+      ],
+      "Resource": [
+        "arn:aws:dynamodb:${REGION}:${ACCOUNT_ID}:table/${STACK_BASE}-cam-data-dev",
+        "arn:aws:dynamodb:${REGION}:${ACCOUNT_ID}:table/${STACK_BASE}-cam-data-test",
+        "arn:aws:dynamodb:${REGION}:${ACCOUNT_ID}:table/${STACK_BASE}-cam-data-dev/index/*",
+        "arn:aws:dynamodb:${REGION}:${ACCOUNT_ID}:table/${STACK_BASE}-cam-data-test/index/*"
+      ]
+    }
+  ]
+}
