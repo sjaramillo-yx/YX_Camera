@@ -10,8 +10,9 @@ fi
 StackName="$1"
 Environment="$2"
 Region="us-east-1"
+FullStackName="${StackName}-${Environment}"
 
-OUT="./.certs"
+OUT="./AWSCertificates"
 mkdir -p "$OUT"
 
 echo "Creating device certificate"
@@ -34,18 +35,18 @@ aws iot attach-policy \
   --policy-name "${StackName}-provisioningPolicy-${Environment}" \
   --target "$DEVICE_CERT_ARN"
 
-echo "Getting CodeSigningCertificateArn from stack ${StackName}-${Environment}"
+echo "Getting CodeSigningCertificateArn from stack ${FullStackName}"
 
 CODESIGN_CERT_ARN="$(
   aws cloudformation describe-stacks \
-    --stack-name "${StackName}-${Environment}" \
+    --stack-name "${FullStackName}" \
     --region "$Region" \
     --query "Stacks[0].Outputs[?OutputKey=='CodeSigningCertificateArn'].OutputValue | [0]" \
     --output text
 )"
 
 if [[ -z "${CODESIGN_CERT_ARN}" || "${CODESIGN_CERT_ARN}" == "None" ]]; then
-  echo "ERROR: Output 'CodeSigningCertificateArn' not found on stack ${StackName}-${Environment} in region ${Region}"
+  echo "ERROR: Output 'CodeSigningCertificateArn' not found on stack ${FullStackName} in region ${Region}"
   exit 2
 fi
 
@@ -56,5 +57,16 @@ aws acm get-certificate --certificate-arn "$CODESIGN_CERT_ARN" --region "$Region
 | openssl x509 -pubkey -noout \
 > "$OUT/ota_sign.public.key"
 
-echo "Done."
+echo "Getting IoT Core Data-ATS endpoint via describe-endpoint"
 
+IOT_ENDPOINT="$(
+  aws iot describe-endpoint \
+    --endpoint-type iot:Data-ATS \
+    --region "$Region" \
+    --query endpointAddress \
+    --output text
+)"
+
+echo "$IOT_ENDPOINT" | tee "$OUT/iot_endpoint.txt"
+
+echo "Done."
