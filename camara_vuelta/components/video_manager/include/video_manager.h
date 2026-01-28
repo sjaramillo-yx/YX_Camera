@@ -7,6 +7,19 @@
  * @brief This header provides helper functions to capture and encode frames.
  *
  * @ingroup video_manager
+ *
+ * This video manager mantains two staging buffers to reduce the frequency of writes and
+ * ensure allocation-size alignment for faster writes. To do this, when data is
+ * received for writing, the manager copies the data into the active staging
+ * buffer using the DMA async copy engine and checks the occupancy of the staging
+ * buffer. If the currently active stage is filled past the threshold, the alignment
+ * is calculated and all the unaligned bytes are copied to the start of the unactive
+ * stage. Then, the other staging buffer is marked as active and the full stage is
+ * written into the SD card at max speed (because of the alignment)
+ *
+ * Example: (* = active stage, : = alignment)
+ *  * [//////////|  ]   ->   * [////////:/|  ] ---      [////////:    ]  -> (write)
+ *    [             ]          [             ]   |--> * [//|          ]
  */
 #pragma once
 
